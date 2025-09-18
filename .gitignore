@@ -1,0 +1,37 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.eclipse/
+.settings/
+.classpath
+.project
+bin/
+
+# Minecraft Development
+runs/
+crash-reports/
+logs/
+.mixin.out/
+
+# OS
+.DS_Store
+Thumbs.db
+*.tmp
+*.temp
+*.log
+
+# Java
+*.class
+*.jar
+!VampireSpellsAddon.jar
+hs_err_pid*
+
+# Generated Resources (optional - uncomment if you don't want to track generated data)
+# src/generated/resources/
