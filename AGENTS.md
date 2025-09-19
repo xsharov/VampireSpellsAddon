@@ -3,7 +3,7 @@
 ## Project Snapshot
 - **Name**: Vampire Spells Addon
 - **Package**: `com.vampirespells.addon`
-- **Version**: 1.21.1-0.0.5
+- **Version**: 1.21.1-0.0.6
 - **Status**: ✅ Production ready
 - **Integration**: Reflection-only bridge between Iron's Spells 'n Spellbooks (1.21.1-3.14.3) and Vampirism (1.10.7)
 
@@ -13,9 +13,9 @@
   - Spend blood (derived from the mana cost curve) and apply the `highBloodCooldownMultiplier` when the vampire has at least `highBloodThresholdFraction` of their maximum blood.
   - Skip the blood drain and apply the `lowBloodCooldownMultiplier` when below the threshold, relying on mana only.
 - **Holy School Backlash**:
-  - Holy damage spells reflect their damage back onto vampire casters.
-  - Holy heals translate into damage for vampire recipients and vampire casters; heals on vampires are fully suppressed.
-  - Holy utility/buff spells (`angel_wings`, `fortify`, `wisp`, `haste`, `cleanse`) simply inflict 5 damage on vampire casters and the cast is cancelled.
+  - Holy damage spells reflect their damage back onto vampire casters and deal double damage to Vampirism NPC vampires.
+  - Holy heals translate into damage for vampire recipients and vampire casters; heals on vampires are fully suppressed via `LivingHealEvent`.
+  - Holy utility/buff spells (`angel_wing`, `fortify`, `wisp`, `haste`, `cleanse`, `sunbeam`) simply inflict 5 damage on vampire casters and the cast is cancelled.
 - Blood cost per spell level is computed from the mana floor/ceiling span using `bloodCostRatioMin` → `bloodCostRatioMax`; setting both to the same value recreates a flat ratio.
 - All logic is runtime-detected through NeoForge events; no parent APIs are linked at compile time.
 
@@ -51,7 +51,7 @@
 ./gradlew runData            # data gen
 ./gradlew runGameTestServer  # tests
 ```
-- Build output: `build/libs/vampire_spells_addon-1.21.1-0.0.5.jar`
+- Build output: `build/libs/vampire_spells_addon-1.21.1-0.0.6.jar`
 - Copy helper (if desired): `cp build/libs/vampire_spells_addon-*.jar ./VampireSpellsAddon.jar`
 
 ## Development Guardrails
@@ -67,9 +67,9 @@
 - [ ] Devour heals blood/mana in line with the config multipliers.
 - [ ] High-blood vampire casts spend blood and apply the high-blood cooldown multiplier.
 - [ ] Low-blood vampire casts skip the blood drain and apply the low-blood cooldown multiplier.
-- [ ] Holy damage spells reflect damage back onto vampire casters.
+- [ ] Holy damage spells reflect damage back onto vampire casters and deal 2× damage to Vampirism NPC vampires.
 - [ ] Holy heals damage vampire casters/targets and the underlying heals are suppressed via `LivingHealEvent`.
-- [ ] Holy utility spells deal 5 damage to vampire casters and the cast is cancelled.
+- [ ] Holy utility spells (`angel_wing`, `fortify`, `wisp`, `haste`, `cleanse`, `sunbeam`) deal 5 damage to vampire casters and the cast is cancelled.
 - [ ] Non-vampires continue to cast normally without blood/holy penalties.
 - [ ] Reflection listeners register without logging errors.
 - [ ] Log output shows informative messages for blood gains/losses and holy backlash.
@@ -83,6 +83,6 @@
 
 ## Build Artifact Verification
 ```bash
-jar -tf build/libs/vampire_spells_addon-1.21.1-0.0.5.jar
+jar -tf build/libs/vampire_spells_addon-1.21.1-0.0.6.jar
 ```
 Expect only our package and NeoForge descriptors (`META-INF/neoforge.mods.toml`).

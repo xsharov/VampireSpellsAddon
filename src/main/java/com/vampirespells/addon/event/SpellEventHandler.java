@@ -48,17 +48,19 @@ public class SpellEventHandler {
             ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "blessing_of_life")
     );
     private static final Set<ResourceLocation> HOLY_UTILITY_SPELLS = Set.of(
-            ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "angel_wings"),
+            ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "angel_wing"),
             ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "fortify"),
             ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "wisp"),
             ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "haste"),
-            ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "cleanse")
+            ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "cleanse"),
+            ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "sunbeam")
     );
     private static final float HOLY_UTILITY_SELF_DAMAGE = 5f;
 
     private static final Map<String, Method> METHOD_CACHE = new ConcurrentHashMap<>();
     private static final Map<UUID, Map<String, BloodCastDecision>> BLOOD_CAST_DECISIONS = new ConcurrentHashMap<>();
     private static final Map<UUID, Float> PENDING_HOLY_HEAL_SUPPRESSION = new ConcurrentHashMap<>();
+    private static volatile Class<?> VAMPIRE_ENTITY_CLASS;
 
     static {
         initializeSpellListeners();
@@ -373,10 +375,26 @@ public class SpellEventHandler {
                 return;
             }
 
+            Method getTargetMethod = cachedMethod(event.getClass(), "getEntity");
+            Object targetObj = getTargetMethod.invoke(event);
+            LivingEntity target = targetObj instanceof LivingEntity living ? living : null;
+
             Method getAmountMethod = cachedMethod(event.getClass(), "getAmount");
             float amount = ((Number) getAmountMethod.invoke(event)).floatValue();
             if (amount <= 0f) {
                 return;
+            }
+
+            if (target != null && !(target instanceof Player) && isVampireEntity(target)) {
+                float original = amount;
+                float doubled = original * 2f;
+                Method setAmountMethod = cachedMethod(event.getClass(), "setAmount", float.class);
+                setAmountMethod.invoke(event, doubled);
+                amount = doubled;
+                VampireSpellsAddon.LOGGER.debug("Doubled holy damage to vampire entity {} ({} -> {})",
+                        target.getName().getString(),
+                        original,
+                        doubled);
             }
 
             damageEntity(caster, amount, "holy_damage_reflection");
@@ -717,6 +735,20 @@ public class SpellEventHandler {
         }
         entity.hurt(entity.damageSources().magic(), amount);
         VampireSpellsAddon.LOGGER.debug("Applied {} damage {} to {}", amount, logContext, entity.getName().getString());
+    }
+
+    private static boolean isVampireEntity(LivingEntity entity) {
+        Class<?> vampireClass = getVampireEntityClass();
+        return vampireClass != null && vampireClass.isInstance(entity);
+    }
+
+    private static Class<?> getVampireEntityClass() {
+        Class<?> cached = VAMPIRE_ENTITY_CLASS;
+        if (cached == null) {
+            cached = resolveClass("de.teamlapen.vampirism.api.entity.vampire.IVampire");
+            VAMPIRE_ENTITY_CLASS = cached;
+        }
+        return cached;
     }
 
     private record BloodCastDecision(boolean useBlood, int bloodCost, double cooldownMultiplier) {}
