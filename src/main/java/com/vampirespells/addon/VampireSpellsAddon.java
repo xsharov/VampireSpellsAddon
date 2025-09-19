@@ -1,8 +1,10 @@
 package com.vampirespells.addon;
 
+import com.vampirespells.addon.config.AddonConfig;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
+import net.neoforged.fml.config.ModConfig;
 import net.neoforged.fml.event.lifecycle.FMLCommonSetupEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,16 +17,14 @@ public class VampireSpellsAddon {
     public VampireSpellsAddon(IEventBus modEventBus, ModContainer modContainer) {
         LOGGER.info("Initializing Vampire Spells Addon...");
 
-        // Register the commonSetup method for modloading
-        modEventBus.addListener(this::commonSetup);
+        modContainer.registerConfig(ModConfig.Type.SERVER, AddonConfig.SPEC, MOD_ID + "-server.toml");
 
-        // Note: SpellEventHandler is automatically registered via @EventBusSubscriber annotation
+        modEventBus.addListener(this::commonSetup);
     }
 
     private void commonSetup(final FMLCommonSetupEvent event) {
         LOGGER.info("Vampire Spells Addon common setup complete!");
 
-        // Verify parent mods are loaded
         event.enqueueWork(() -> {
             try {
                 Class.forName("de.teamlapen.vampirism.api.VampirismAPI");

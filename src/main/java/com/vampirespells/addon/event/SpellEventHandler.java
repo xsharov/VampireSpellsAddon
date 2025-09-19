@@ -1,6 +1,7 @@
 package com.vampirespells.addon.event;
 
 import com.vampirespells.addon.VampireSpellsAddon;
+import com.vampirespells.addon.config.AddonConfig;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
@@ -17,6 +18,7 @@ import java.lang.reflect.Proxy;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
@@ -36,9 +38,8 @@ public class SpellEventHandler {
             ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "acupuncture")
     );
 
-    private static final float MANA_PER_BLOOD = 20f;
-
     private static final Map<String, Method> METHOD_CACHE = new ConcurrentHashMap<>();
+    private static final Map<UUID, Map<String, BloodCastDecision>> BLOOD_CAST_DECISIONS = new ConcurrentHashMap<>();
 
     static {
         initializeSpellListeners();
@@ -86,8 +87,15 @@ public class SpellEventHandler {
             return;
         }
 
-        int bloodAmount = Math.max(1, Math.round(damageAmount));
-        vampireContext.drinkBlood(bloodAmount, target, 0.5f);
+        double restoreMultiplier = Math.max(0d, AddonConfig.RAY_BLOOD_RESTORE_MULTIPLIER.get());
+        double saturation = Math.max(0d, AddonConfig.RAY_BLOOD_SATURATION.get());
+
+        if (restoreMultiplier <= 0d) {
+            return;
+        }
+
+        int bloodAmount = Math.max(1, Math.round(damageAmount * (float) restoreMultiplier));
+        vampireContext.drinkBlood(bloodAmount, target, (float) saturation);
 
         VampireSpellsAddon.LOGGER.debug("Ray of Siphoning: vampire {} gained {} blood from {}", caster.getName().getString(), bloodAmount, target.getName().getString());
     }
@@ -109,8 +117,15 @@ public class SpellEventHandler {
             return;
         }
 
-        int bloodAmount = Math.max(1, Math.round(damageAmount * 2f));
-        vampireContext.drinkBlood(bloodAmount, target, 0.6f);
+        double restoreMultiplier = Math.max(0d, AddonConfig.DEVOUR_BLOOD_RESTORE_MULTIPLIER.get());
+        double saturation = Math.max(0d, AddonConfig.DEVOUR_BLOOD_SATURATION.get());
+
+        if (restoreMultiplier <= 0d) {
+            return;
+        }
+
+        int bloodAmount = Math.max(1, Math.round(damageAmount * (float) restoreMultiplier));
+        vampireContext.drinkBlood(bloodAmount, target, (float) saturation);
 
         VampireSpellsAddon.LOGGER.debug("Devour: vampire {} gained {} blood from {}", caster.getName().getString(), bloodAmount, target.getName().getString());
     }
@@ -129,6 +144,10 @@ public class SpellEventHandler {
         registerSpellListener(
                 "io.redspace.ironsspellbooks.api.events.SpellOnCastEvent",
                 SpellEventHandler::onSpellOnCast
+        );
+        registerSpellListener(
+                "io.redspace.ironsspellbooks.api.events.SpellCooldownAddedEvent$Pre",
+                SpellEventHandler::onSpellCooldownPre
         );
     }
 
@@ -210,22 +229,24 @@ public class SpellEventHandler {
             ResourceLocation spellResource = ResourceLocation.parse(spellId);
 
             if (!BLOOD_COST_SPELLS.contains(spellResource)) {
+                clearDecision(caster, spellId);
                 return;
             }
 
             int spellLevel = (Integer) getSpellLevelMethod.invoke(event);
             int bloodCost = calculateBloodCost(spellResource, spellLevel);
 
-            if (bloodCost <= 0) {
-                return;
-            }
+            BloodCastDecision decision = decideBloodUsage(vampireContext, bloodCost);
+            storeDecision(caster, spellId, decision);
 
-            if (!vampireContext.hasBlood(bloodCost)) {
-                Method setCanceled = cachedMethod(event.getClass(), "setCanceled", boolean.class);
-                setCanceled.invoke(event, true);
-                VampireSpellsAddon.LOGGER.debug("Canceled {} cast for vampire {} due to insufficient blood (cost {}), current {}",
-                        spellResource, caster.getName().getString(), bloodCost, vampireContext.getBloodLevel());
-            }
+            VampireSpellsAddon.LOGGER.debug(
+                    "Pre-cast decision for {} by {}: useBlood={}, cost={}, cooldownMultiplier={}",
+                    spellResource,
+                    caster.getName().getString(),
+                    decision.useBlood(),
+                    decision.bloodCost(),
+                    decision.cooldownMultiplier()
+            );
         } catch (Exception e) {
             VampireSpellsAddon.LOGGER.warn("Failed to evaluate SpellPreCastEvent: {}", e.getMessage());
         }
@@ -252,21 +273,32 @@ public class SpellEventHandler {
             }
 
             if (!vampireContext.isVampire() || !BLOOD_COST_SPELLS.contains(spellResource)) {
+                clearDecision(caster, spellId);
                 return;
             }
 
             int spellLevel = (Integer) getSpellLevelMethod.invoke(event);
             int bloodCost = calculateBloodCost(spellResource, spellLevel);
 
-            if (bloodCost <= 0) {
-                return;
+            BloodCastDecision decision = getDecision(caster, spellId);
+            if (decision == null || decision.bloodCost() != bloodCost) {
+                decision = decideBloodUsage(vampireContext, bloodCost);
+                storeDecision(caster, spellId, decision);
             }
 
-            if (!vampireContext.consumeBlood(bloodCost)) {
-                VampireSpellsAddon.LOGGER.debug("Failed to consume blood cost {} for spell {} by vampire {}", bloodCost, spellResource, caster.getName().getString());
+            if (decision.useBlood() && bloodCost > 0) {
+                if (!vampireContext.consumeBlood(bloodCost)) {
+                    VampireSpellsAddon.LOGGER.debug("Failed to consume blood cost {} for spell {} by vampire {}",
+                            bloodCost, spellResource, caster.getName().getString());
+                    BloodCastDecision fallback = decideBloodUsage(vampireContext, 0);
+                    storeDecision(caster, spellId, fallback);
+                } else {
+                    VampireSpellsAddon.LOGGER.debug("Consumed {} blood for spell {} by vampire {} (remaining {})",
+                            bloodCost, spellResource, caster.getName().getString(), vampireContext.getBloodLevel());
+                }
             } else {
-                VampireSpellsAddon.LOGGER.debug("Consumed {} blood for spell {} by vampire {} (remaining {})",
-                        bloodCost, spellResource, caster.getName().getString(), vampireContext.getBloodLevel());
+                VampireSpellsAddon.LOGGER.debug("Skipped blood cost for spell {} by vampire {} (current blood {} / max {})",
+                        spellResource, caster.getName().getString(), vampireContext.getBloodLevel(), vampireContext.getMaxBlood());
             }
         } catch (Exception e) {
             VampireSpellsAddon.LOGGER.warn("Failed to process SpellOnCastEvent: {}", e.getMessage());
@@ -281,11 +313,15 @@ public class SpellEventHandler {
 
             int original = (Integer) getOriginalManaCost.invoke(event);
             int current = (Integer) getManaCost.invoke(event);
+            double multiplier = Math.max(0d, AddonConfig.DEVOUR_MANA_MULTIPLIER.get());
+            int desired = (int) Math.round(current * multiplier);
+            if (multiplier > 0 && desired <= 0) {
+                desired = 1;
+            }
 
-            int desired = Math.max(current, original) * 2;
-            if (current < desired) {
+            if (desired != current) {
                 setManaCost.invoke(event, desired);
-                VampireSpellsAddon.LOGGER.debug("Adjusted Devour mana cost to {} (original {})", desired, original);
+                VampireSpellsAddon.LOGGER.debug("Adjusted Devour mana cost to {} (original {}, prior {})", desired, original, current);
             }
         } catch (Exception e) {
             VampireSpellsAddon.LOGGER.warn("Failed to adjust Devour mana cost: {}", e.getMessage());
@@ -310,11 +346,30 @@ public class SpellEventHandler {
             if (manaCost <= 0) {
                 return 0;
             }
-            return Math.max(1, (int) Math.ceil(manaCost / MANA_PER_BLOOD));
+            double ratio = Math.max(0d, computeBloodRatio(manaCost));
+            if (ratio <= 0d) {
+                return 0;
+            }
+
+            return Math.max(1, (int) Math.ceil(manaCost * ratio));
         } catch (Exception e) {
             VampireSpellsAddon.LOGGER.warn("Failed to calculate blood cost for {}: {}", spellId, e.getMessage());
             return 0;
         }
+    }
+
+    private static double computeBloodRatio(int manaCost) {
+        double floorMana = Math.max(0d, AddonConfig.BLOOD_COST_MANA_FLOOR.get());
+        double ceilingMana = Math.max(floorMana, AddonConfig.BLOOD_COST_MANA_CEILING.get());
+        double minRatio = Math.max(0d, AddonConfig.BLOOD_COST_RATIO_MIN.get());
+        double maxRatio = Math.max(0d, AddonConfig.BLOOD_COST_RATIO_MAX.get());
+
+        if (ceilingMana <= floorMana) {
+            return manaCost >= ceilingMana ? maxRatio : minRatio;
+        }
+
+        double normalized = clamp((manaCost - floorMana) / (ceilingMana - floorMana), 0d, 1d);
+        return minRatio + (maxRatio - minRatio) * normalized;
     }
 
     private static VampireContext getVampireContext(Player player) {
@@ -340,6 +395,102 @@ public class SpellEventHandler {
             VampireSpellsAddon.LOGGER.warn("Failed to fetch vampire context: {}", e.getMessage());
             return VampireContext.notVampire();
         }
+    }
+
+    private static BloodCastDecision decideBloodUsage(VampireContext vampireContext, int bloodCost) {
+        double thresholdFraction = clamp(AddonConfig.HIGH_BLOOD_THRESHOLD_FRACTION.get(), 0d, 1d);
+        int maxBlood = vampireContext.getMaxBlood();
+        int currentBlood = vampireContext.getBloodLevel();
+
+        boolean highBlood = maxBlood > 0 && currentBlood >= Math.round(maxBlood * thresholdFraction);
+        boolean useBlood = highBlood && bloodCost > 0 && vampireContext.hasBlood(bloodCost);
+
+        double highMultiplier = Math.max(0d, AddonConfig.HIGH_BLOOD_COOLDOWN_MULTIPLIER.get());
+        double lowMultiplier = Math.max(0d, AddonConfig.LOW_BLOOD_COOLDOWN_MULTIPLIER.get());
+        double cooldownMultiplier = highBlood ? highMultiplier : lowMultiplier;
+
+        if (!useBlood) {
+            bloodCost = Math.max(0, bloodCost);
+        }
+
+        return new BloodCastDecision(useBlood, bloodCost, cooldownMultiplier);
+    }
+
+    private static void onSpellCooldownPre(Object event) {
+        try {
+            Method getEntityMethod = cachedMethod(event.getClass(), "getEntity");
+            Object entityObj = getEntityMethod.invoke(event);
+            if (!(entityObj instanceof Player caster)) {
+                return;
+            }
+
+            Method getSpellMethod = cachedMethod(event.getClass(), "getSpell");
+            Object spell = getSpellMethod.invoke(event);
+            if (spell == null) {
+                return;
+            }
+
+            Method getSpellResourceMethod = cachedMethod(spell.getClass(), "getSpellResource");
+            ResourceLocation spellResource = (ResourceLocation) getSpellResourceMethod.invoke(spell);
+            String spellId = spellResource.toString();
+
+            BloodCastDecision decision = removeDecision(caster, spellId);
+            if (decision == null) {
+                return;
+            }
+
+            Method getCooldownMethod = cachedMethod(event.getClass(), "getEffectiveCooldown");
+            Method setCooldownMethod = cachedMethod(event.getClass(), "setEffectiveCooldown", int.class);
+
+            int current = (Integer) getCooldownMethod.invoke(event);
+            double multiplier = Math.max(0d, decision.cooldownMultiplier());
+            int adjusted = (int) Math.round(current * multiplier);
+            if (multiplier > 0d && adjusted <= 0) {
+                adjusted = 1;
+            }
+
+            setCooldownMethod.invoke(event, Math.max(0, adjusted));
+
+            VampireSpellsAddon.LOGGER.debug("Adjusted cooldown for {} by {} with multiplier {} ({} -> {})",
+                    spellResource,
+                    caster.getName().getString(),
+                    multiplier,
+                    current,
+                    Math.max(0, adjusted));
+        } catch (Exception e) {
+            VampireSpellsAddon.LOGGER.warn("Failed to adjust cooldown: {}", e.getMessage());
+        }
+    }
+
+    private static void storeDecision(Player player, String spellId, BloodCastDecision decision) {
+        BLOOD_CAST_DECISIONS
+                .computeIfAbsent(player.getUUID(), id -> new ConcurrentHashMap<>())
+                .put(spellId, decision);
+    }
+
+    private static BloodCastDecision getDecision(Player player, String spellId) {
+        Map<String, BloodCastDecision> decisions = BLOOD_CAST_DECISIONS.get(player.getUUID());
+        return decisions != null ? decisions.get(spellId) : null;
+    }
+
+    private static BloodCastDecision removeDecision(Player player, String spellId) {
+        Map<String, BloodCastDecision> decisions = BLOOD_CAST_DECISIONS.get(player.getUUID());
+        if (decisions == null) {
+            return null;
+        }
+        BloodCastDecision removed = decisions.remove(spellId);
+        if (decisions.isEmpty()) {
+            BLOOD_CAST_DECISIONS.remove(player.getUUID());
+        }
+        return removed;
+    }
+
+    private static void clearDecision(Player player, String spellId) {
+        removeDecision(player, spellId);
+    }
+
+    private static double clamp(double value, double min, double max) {
+        return Math.max(min, Math.min(max, value));
     }
 
     private static Method cachedMethod(Class<?> targetClass, String name, Class<?>... params) throws NoSuchMethodException {
@@ -369,6 +520,8 @@ public class SpellEventHandler {
         }
     }
 
+    private record BloodCastDecision(boolean useBlood, int bloodCost, double cooldownMultiplier) {}
+
     private record VampireContext(Player player, Object handle) {
 
         static VampireContext notVampire() {
@@ -388,6 +541,24 @@ public class SpellEventHandler {
                 return (Integer) getBloodLevelMethod.invoke(handle);
             } catch (Exception e) {
                 VampireSpellsAddon.LOGGER.warn("Failed to query vampire blood level: {}", e.getMessage());
+                return 0;
+            }
+        }
+
+        int getMaxBlood() {
+            if (!isVampire()) {
+                return 0;
+            }
+            try {
+                Method getBloodStatsMethod = cachedMethod(handle.getClass(), "getBloodStats");
+                Object stats = getBloodStatsMethod.invoke(handle);
+                if (stats == null) {
+                    return 0;
+                }
+                Method getMaxBloodMethod = cachedMethod(stats.getClass(), "getMaxBlood");
+                return (Integer) getMaxBloodMethod.invoke(stats);
+            } catch (Exception e) {
+                VampireSpellsAddon.LOGGER.warn("Failed to query vampire max blood: {}", e.getMessage());
                 return 0;
             }
         }

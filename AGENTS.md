@@ -3,25 +3,42 @@
 ## Project Snapshot
 - **Name**: Vampire Spells Addon
 - **Package**: `com.vampirespells.addon`
-- **Version**: 1.21.1-0.0.3
+- **Version**: 1.21.1-0.0.4
 - **Status**: ✅ Production ready
 - **Integration**: Reflection-only bridge between Iron's Spells 'n Spellbooks (1.21.1-3.14.3) and Vampirism (1.10.7)
 
 ## Gameplay Changes
-- **Ray of Siphoning** now keeps its damage while restoring blood equal to the dealt damage for vampire casters.
-- **Devour** restores double the dealt damage as blood and now costs 2× its original mana.
-- **Blood Spell Surcharge**: the following spells charge blood in addition to mana when cast by vampires, at a rate of 1 blood per 20 mana (rounded up):
-  `wither_skull`, `sacrifice`, `raise_dead`, `heartstop`, `blood_step`, `blood_slash`, `blood_needles`, `acupuncture`.
-  - Casts are cancelled if the vampire cannot afford the blood cost (non-vampires unaffected).
+- **Ray of Siphoning** keeps its damage and restores blood using the configurable `rayBloodRestoreMultiplier` and `rayBloodSaturation` values.
+- **Devour** restores blood scaled by `devourBloodRestoreMultiplier`, applies `devourBloodSaturation`, and multiplies its mana cost by `devourManaMultiplier`.
+- **Blood Spell Threshold**: `wither_skull`, `sacrifice`, `raise_dead`, `heartstop`, `blood_step`, `blood_slash`, `blood_needles`, and `acupuncture` now:
+  - Spend blood (derived from the mana cost curve) and apply the `highBloodCooldownMultiplier` when the vampire has at least `highBloodThresholdFraction` of their maximum blood.
+  - Skip the blood drain and apply the `lowBloodCooldownMultiplier` when below the threshold, relying on mana only.
+- Blood cost per spell level is computed from the mana floor/ceiling span using `bloodCostRatioMin` → `bloodCostRatioMax`; setting both to the same value recreates a flat ratio.
 - All logic is runtime-detected through NeoForge events; no parent APIs are linked at compile time.
 
 ## Technical Notes
 - **Event Hooks**:
   - `LivingDamageEvent.Pre` (NeoForge) handles Ray/Devour blood restoration.
-  - `SpellPreCastEvent` and `SpellOnCastEvent` are attached reflectively (using `NeoForge.EVENT_BUS.addListener`) to enforce costs without compile-time dependencies.
+  - `SpellPreCastEvent`, `SpellOnCastEvent`, and `SpellCooldownAddedEvent.Pre` are attached reflectively to apply blood usage and cooldown multipliers.
 - **Reflection Helpers**: All access to Vampirism (`VampirismAPI`, `IVampirePlayer`, `IDrinkBloodContext`) and Iron's Spells (`SpellRegistry`, spell metadata) is performed via cached reflection lookups.
-- **Blood Cost Logic**: `ceil(manaCost / 20f)` with a minimum of 1. Cost is only deducted when the cast successfully fires.
-- **Mana Adjustments**: Devour's mana cost is doubled via `SpellOnCastEvent#setManaCost` if it has not already been modified by other mods.
+- **Blood Cost Logic**: Mana cost is mapped onto the `[bloodCostManaFloor, bloodCostManaCeiling]` band, blending between `bloodCostRatioMin` and `bloodCostRatioMax`, then rounded up.
+- **Cooldown Scaling**: High-blood casts use `highBloodCooldownMultiplier`, low-blood casts use `lowBloodCooldownMultiplier` before NeoForge applies the cooldown.
+- **Mana Adjustments**: Devour's mana cost is multiplied by `devourManaMultiplier` via `SpellOnCastEvent#setManaCost`.
+
+## Configuration
+- A server config file (`config/vampire_spells_addon-server.toml`) is generated automatically.
+- `blood_spells.bloodCostManaFloor`: Lowest mana cost used when normalising mana → blood ratios.
+- `blood_spells.bloodCostManaCeiling`: Highest mana cost used when normalising mana → blood ratios.
+- `blood_spells.bloodCostRatioMin`: Blood-per-mana ratio at or below the mana floor.
+- `blood_spells.bloodCostRatioMax`: Blood-per-mana ratio at or above the mana ceiling.
+- `blood_spells.highBloodThresholdFraction`: Fraction of max blood that qualifies for the high-blood casting state.
+- `blood_spells.highBloodCooldownMultiplier`: Cooldown multiplier applied in the high-blood state.
+- `blood_spells.lowBloodCooldownMultiplier`: Cooldown multiplier applied when below the threshold (blood is not spent).
+- `blood_spells.devourManaMultiplier`: Multiplier applied to Devour's mana cost.
+- `blood_spells.devourBloodRestoreMultiplier`: Damage → blood multiplier for Devour.
+- `blood_spells.devourBloodSaturation`: Saturation modifier used when Devour restores blood.
+- `blood_spells.rayBloodRestoreMultiplier`: Damage → blood multiplier for Ray of Siphoning.
+- `blood_spells.rayBloodSaturation`: Saturation modifier used when Ray of Siphoning restores blood.
 
 ## Build & Run
 ```bash
@@ -30,7 +47,7 @@
 ./gradlew runData            # data gen
 ./gradlew runGameTestServer  # tests
 ```
-- Build output: `build/libs/vampire_spells_addon-1.21.1-0.0.3.jar`
+- Build output: `build/libs/vampire_spells_addon-1.21.1-0.0.4.jar`
 - Copy helper (if desired): `cp build/libs/vampire_spells_addon-*.jar ./VampireSpellsAddon.jar`
 
 ## Development Guardrails
@@ -42,21 +59,22 @@
 
 ## Validation Checklist
 - [ ] `./gradlew build` succeeds.
-- [ ] Ray of Siphoning damages targets and restores vampire blood per hit.
-- [ ] Devour heals vampire blood for double damage and consumes double mana.
-- [ ] Blood-cost spells deduct blood according to the 1:20 ratio and refuse to cast if insufficient blood is available.
-- [ ] Blood deductions apply only to vampires; non-vampires behave normally.
+- [ ] Ray of Siphoning restores blood at the configured multiplier and saturation.
+- [ ] Devour heals blood/mana in line with the config multipliers.
+- [ ] High-blood vampire casts spend blood and apply the high-blood cooldown multiplier.
+- [ ] Low-blood vampire casts skip the blood drain and apply the low-blood cooldown multiplier.
+- [ ] Non-vampires continue to cast normally without blood hooks.
 - [ ] Reflection listeners register without logging errors.
-- [ ] Log output shows informative messages for blood gains/losses.
+- [ ] Log output shows informative messages for blood gains/losses and cooldown adjustments.
 
 ## Troubleshooting
 - **Missing parent mods**: Startup logs will report missing APIs; addon should fail gracefully.
-- **Blood not deducting**: verify Vampirism API method names (obfuscated updates may change signatures) and the 1:20 ratio math.
-- **Cast not blocked**: ensure `SpellPreCastEvent` listener is firing; check reflective registration logs.
-- **Devour mana unchanged**: confirm no other mods set the mana cost larger than ours before we run.
+- **Unexpected blood usage**: verify threshold/config values; ensure Vampirism API method names still match (`getBloodStats`, `useBlood`).
+- **Cooldown not scaling**: confirm the `SpellCooldownAddedEvent.Pre` listener registers (look for debug log).
+- **Devour mana unchanged**: confirm no other mods set the mana cost after our handler, or adjust `devourManaMultiplier`.
 
 ## Build Artifact Verification
 ```bash
-jar -tf build/libs/vampire_spells_addon-1.21.1-0.0.3.jar
+jar -tf build/libs/vampire_spells_addon-1.21.1-0.0.4.jar
 ```
 Expect only our package and NeoForge descriptors (`META-INF/neoforge.mods.toml`).
