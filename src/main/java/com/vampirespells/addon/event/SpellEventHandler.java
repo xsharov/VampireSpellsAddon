@@ -10,6 +10,7 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.entity.living.LivingDamageEvent;
+import net.neoforged.neoforge.event.entity.living.LivingHealEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 
 import java.lang.reflect.InvocationTargetException;
@@ -38,8 +39,26 @@ public class SpellEventHandler {
             ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "acupuncture")
     );
 
+    private static final ResourceLocation HOLY_SCHOOL_ID = ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "holy");
+    private static final Set<ResourceLocation> HOLY_HEAL_SPELLS = Set.of(
+            ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "heal"),
+            ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "greater_heal"),
+            ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "healing_circle"),
+            ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "cloud_of_regeneration"),
+            ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "blessing_of_life")
+    );
+    private static final Set<ResourceLocation> HOLY_UTILITY_SPELLS = Set.of(
+            ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "angel_wings"),
+            ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "fortify"),
+            ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "wisp"),
+            ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "haste"),
+            ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "cleanse")
+    );
+    private static final float HOLY_UTILITY_SELF_DAMAGE = 5f;
+
     private static final Map<String, Method> METHOD_CACHE = new ConcurrentHashMap<>();
     private static final Map<UUID, Map<String, BloodCastDecision>> BLOOD_CAST_DECISIONS = new ConcurrentHashMap<>();
+    private static final Map<UUID, Float> PENDING_HOLY_HEAL_SUPPRESSION = new ConcurrentHashMap<>();
 
     static {
         initializeSpellListeners();
@@ -149,6 +168,14 @@ public class SpellEventHandler {
                 "io.redspace.ironsspellbooks.api.events.SpellCooldownAddedEvent$Pre",
                 SpellEventHandler::onSpellCooldownPre
         );
+        registerSpellListener(
+                "io.redspace.ironsspellbooks.api.events.SpellDamageEvent",
+                SpellEventHandler::onSpellDamage
+        );
+        registerSpellListener(
+                "io.redspace.ironsspellbooks.api.events.SpellHealEvent",
+                SpellEventHandler::onSpellHeal
+        );
     }
 
     private static void registerSpellListener(String className, Consumer<Object> handler) {
@@ -224,29 +251,34 @@ public class SpellEventHandler {
         try {
             Method getSpellIdMethod = cachedMethod(event.getClass(), "getSpellId");
             Method getSpellLevelMethod = cachedMethod(event.getClass(), "getSpellLevel");
+            Method getSchoolTypeMethod = cachedMethod(event.getClass(), "getSchoolType");
 
             String spellId = (String) getSpellIdMethod.invoke(event);
             ResourceLocation spellResource = ResourceLocation.parse(spellId);
+            Object schoolType = getSchoolTypeMethod.invoke(event);
 
-            if (!BLOOD_COST_SPELLS.contains(spellResource)) {
+            if (BLOOD_COST_SPELLS.contains(spellResource)) {
+                int spellLevel = (Integer) getSpellLevelMethod.invoke(event);
+                int bloodCost = calculateBloodCost(spellResource, spellLevel);
+
+                BloodCastDecision decision = decideBloodUsage(vampireContext, bloodCost);
+                storeDecision(caster, spellId, decision);
+
+                VampireSpellsAddon.LOGGER.debug(
+                        "Pre-cast decision for {} by {}: useBlood={}, cost={}, cooldownMultiplier={}",
+                        spellResource,
+                        caster.getName().getString(),
+                        decision.useBlood(),
+                        decision.bloodCost(),
+                        decision.cooldownMultiplier()
+                );
+            } else {
                 clearDecision(caster, spellId);
-                return;
             }
 
-            int spellLevel = (Integer) getSpellLevelMethod.invoke(event);
-            int bloodCost = calculateBloodCost(spellResource, spellLevel);
-
-            BloodCastDecision decision = decideBloodUsage(vampireContext, bloodCost);
-            storeDecision(caster, spellId, decision);
-
-            VampireSpellsAddon.LOGGER.debug(
-                    "Pre-cast decision for {} by {}: useBlood={}, cost={}, cooldownMultiplier={}",
-                    spellResource,
-                    caster.getName().getString(),
-                    decision.useBlood(),
-                    decision.bloodCost(),
-                    decision.cooldownMultiplier()
-            );
+            if (isHolySchool(schoolType) && vampireContext.isVampire() && HOLY_UTILITY_SPELLS.contains(spellResource)) {
+                handleHolyUtilityPreCast(event, caster, spellResource);
+            }
         } catch (Exception e) {
             VampireSpellsAddon.LOGGER.warn("Failed to evaluate SpellPreCastEvent: {}", e.getMessage());
         }
@@ -302,6 +334,97 @@ public class SpellEventHandler {
             }
         } catch (Exception e) {
             VampireSpellsAddon.LOGGER.warn("Failed to process SpellOnCastEvent: {}", e.getMessage());
+        }
+    }
+
+    private static void onSpellDamage(Object event) {
+        try {
+            Class<?> spellDamageSourceClass = resolveClass("io.redspace.ironsspellbooks.damage.SpellDamageSource");
+            if (spellDamageSourceClass == null) {
+                return;
+            }
+
+            Method getSpellDamageSourceMethod = cachedMethod(event.getClass(), "getSpellDamageSource");
+            Object damageSource = getSpellDamageSourceMethod.invoke(event);
+            if (damageSource == null || !spellDamageSourceClass.isInstance(damageSource)) {
+                return;
+            }
+
+            Method spellMethod = cachedMethod(spellDamageSourceClass, "spell");
+            Object spell = spellMethod.invoke(damageSource);
+            if (spell == null) {
+                return;
+            }
+
+            Method getSchoolTypeMethod = cachedMethod(spell.getClass(), "getSchoolType");
+            Object schoolType = getSchoolTypeMethod.invoke(spell);
+            if (!isHolySchool(schoolType)) {
+                return;
+            }
+
+            Method getEntityFromSource = cachedMethod(spellDamageSourceClass, "getEntity");
+            Object casterObj = getEntityFromSource.invoke(damageSource);
+            if (!(casterObj instanceof Player caster)) {
+                return;
+            }
+
+            VampireContext vampireContext = getVampireContext(caster);
+            if (!vampireContext.isVampire()) {
+                return;
+            }
+
+            Method getAmountMethod = cachedMethod(event.getClass(), "getAmount");
+            float amount = ((Number) getAmountMethod.invoke(event)).floatValue();
+            if (amount <= 0f) {
+                return;
+            }
+
+            damageEntity(caster, amount, "holy_damage_reflection");
+        } catch (Exception e) {
+            VampireSpellsAddon.LOGGER.warn("Failed to apply holy damage backlash: {}", e.getMessage());
+        }
+    }
+
+    private static void onSpellHeal(Object event) {
+        try {
+            Method getSchoolTypeMethod = cachedMethod(event.getClass(), "getSchoolType");
+            Object schoolType = getSchoolTypeMethod.invoke(event);
+            if (!isHolySchool(schoolType)) {
+                return;
+            }
+
+            Method getHealAmountMethod = cachedMethod(event.getClass(), "getHealAmount");
+            float healAmount = ((Number) getHealAmountMethod.invoke(event)).floatValue();
+            if (healAmount <= 0f) {
+                return;
+            }
+
+            Method getCasterMethod = cachedMethod(event.getClass(), "getEntity");
+            Object casterObj = getCasterMethod.invoke(event);
+            LivingEntity caster = casterObj instanceof LivingEntity ? (LivingEntity) casterObj : null;
+
+            Method getTargetMethod = cachedMethod(event.getClass(), "getTargetEntity");
+            Object targetObj = getTargetMethod.invoke(event);
+            LivingEntity target = targetObj instanceof LivingEntity ? (LivingEntity) targetObj : null;
+
+            boolean sameEntity = caster != null && caster == target;
+
+            if (caster instanceof Player casterPlayer) {
+                VampireContext casterVamp = getVampireContext(casterPlayer);
+                if (casterVamp.isVampire() && !sameEntity) {
+                    damageEntity(casterPlayer, healAmount, "holy_heal_caster_penalty");
+                }
+            }
+
+            if (target instanceof Player targetPlayer) {
+                VampireContext targetVamp = getVampireContext(targetPlayer);
+                if (targetVamp.isVampire()) {
+                    queueHolyHealSuppression(targetPlayer, healAmount);
+                    damageEntity(targetPlayer, healAmount, "holy_heal_target_penalty");
+                }
+            }
+        } catch (Exception e) {
+            VampireSpellsAddon.LOGGER.warn("Failed to apply holy heal backlash: {}", e.getMessage());
         }
     }
 
@@ -518,6 +641,82 @@ public class SpellEventHandler {
         } catch (ClassNotFoundException e) {
             return null;
         }
+    }
+
+    @SubscribeEvent
+    public static void onLivingHeal(LivingHealEvent event) {
+        if (event.getEntity().level().isClientSide()) {
+            return;
+        }
+
+        UUID id = event.getEntity().getUUID();
+        Float pending = PENDING_HOLY_HEAL_SUPPRESSION.get(id);
+        if (pending == null || pending <= 0f) {
+            return;
+        }
+
+        float amount = event.getAmount();
+        if (amount <= 0f) {
+            return;
+        }
+
+        if (pending >= amount) {
+            event.setAmount(0f);
+            float remaining = pending - amount;
+            if (remaining > 0f) {
+                PENDING_HOLY_HEAL_SUPPRESSION.put(id, remaining);
+            } else {
+                PENDING_HOLY_HEAL_SUPPRESSION.remove(id);
+            }
+        } else {
+            event.setAmount(amount - pending);
+            PENDING_HOLY_HEAL_SUPPRESSION.remove(id);
+        }
+    }
+
+    private static boolean isHolySchool(Object schoolType) {
+        if (schoolType == null) {
+            return false;
+        }
+        try {
+            Method getIdMethod = cachedMethod(schoolType.getClass(), "getId");
+            Object result = getIdMethod.invoke(schoolType);
+            if (result instanceof ResourceLocation location) {
+                return location.equals(HOLY_SCHOOL_ID);
+            }
+        } catch (Exception e) {
+            VampireSpellsAddon.LOGGER.debug("Failed to resolve school id: {}", e.getMessage());
+        }
+        return false;
+    }
+
+    private static void handleHolyUtilityPreCast(Object event, Player caster, ResourceLocation spellResource) {
+        damageEntity(caster, HOLY_UTILITY_SELF_DAMAGE, "holy_utility_penalty");
+        try {
+            Method setCanceled = cachedMethod(event.getClass(), "setCanceled", boolean.class);
+            setCanceled.invoke(event, true);
+            VampireSpellsAddon.LOGGER.debug("Prevented holy utility spell {} for vampire {}", spellResource, caster.getName().getString());
+        } catch (Exception e) {
+            VampireSpellsAddon.LOGGER.warn("Failed to cancel holy utility spell {} for vampire {}: {}",
+                    spellResource,
+                    caster.getName().getString(),
+                    e.getMessage());
+        }
+    }
+
+    private static void queueHolyHealSuppression(LivingEntity entity, float amount) {
+        if (entity == null || amount <= 0f || entity.level().isClientSide()) {
+            return;
+        }
+        PENDING_HOLY_HEAL_SUPPRESSION.merge(entity.getUUID(), amount, Float::sum);
+    }
+
+    private static void damageEntity(LivingEntity entity, float amount, String logContext) {
+        if (entity == null || amount <= 0f || entity.level().isClientSide()) {
+            return;
+        }
+        entity.hurt(entity.damageSources().magic(), amount);
+        VampireSpellsAddon.LOGGER.debug("Applied {} damage {} to {}", amount, logContext, entity.getName().getString());
     }
 
     private record BloodCastDecision(boolean useBlood, int bloodCost, double cooldownMultiplier) {}

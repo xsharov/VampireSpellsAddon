@@ -3,16 +3,19 @@
 ## Project Snapshot
 - **Name**: Vampire Spells Addon
 - **Package**: `com.vampirespells.addon`
-- **Version**: 1.21.1-0.0.4
+- **Version**: 1.21.1-0.0.5
 - **Status**: ✅ Production ready
 - **Integration**: Reflection-only bridge between Iron's Spells 'n Spellbooks (1.21.1-3.14.3) and Vampirism (1.10.7)
 
-## Gameplay Changes
 - **Ray of Siphoning** keeps its damage and restores blood using the configurable `rayBloodRestoreMultiplier` and `rayBloodSaturation` values.
 - **Devour** restores blood scaled by `devourBloodRestoreMultiplier`, applies `devourBloodSaturation`, and multiplies its mana cost by `devourManaMultiplier`.
 - **Blood Spell Threshold**: `wither_skull`, `sacrifice`, `raise_dead`, `heartstop`, `blood_step`, `blood_slash`, `blood_needles`, and `acupuncture` now:
   - Spend blood (derived from the mana cost curve) and apply the `highBloodCooldownMultiplier` when the vampire has at least `highBloodThresholdFraction` of their maximum blood.
   - Skip the blood drain and apply the `lowBloodCooldownMultiplier` when below the threshold, relying on mana only.
+- **Holy School Backlash**:
+  - Holy damage spells reflect their damage back onto vampire casters.
+  - Holy heals translate into damage for vampire recipients and vampire casters; heals on vampires are fully suppressed.
+  - Holy utility/buff spells (`angel_wings`, `fortify`, `wisp`, `haste`, `cleanse`) simply inflict 5 damage on vampire casters and the cast is cancelled.
 - Blood cost per spell level is computed from the mana floor/ceiling span using `bloodCostRatioMin` → `bloodCostRatioMax`; setting both to the same value recreates a flat ratio.
 - All logic is runtime-detected through NeoForge events; no parent APIs are linked at compile time.
 
@@ -20,6 +23,7 @@
 - **Event Hooks**:
   - `LivingDamageEvent.Pre` (NeoForge) handles Ray/Devour blood restoration.
   - `SpellPreCastEvent`, `SpellOnCastEvent`, and `SpellCooldownAddedEvent.Pre` are attached reflectively to apply blood usage and cooldown multipliers.
+  - `SpellDamageEvent`, `SpellHealEvent`, and `LivingHealEvent` impose holy-school backlash on vampires.
 - **Reflection Helpers**: All access to Vampirism (`VampirismAPI`, `IVampirePlayer`, `IDrinkBloodContext`) and Iron's Spells (`SpellRegistry`, spell metadata) is performed via cached reflection lookups.
 - **Blood Cost Logic**: Mana cost is mapped onto the `[bloodCostManaFloor, bloodCostManaCeiling]` band, blending between `bloodCostRatioMin` and `bloodCostRatioMax`, then rounded up.
 - **Cooldown Scaling**: High-blood casts use `highBloodCooldownMultiplier`, low-blood casts use `lowBloodCooldownMultiplier` before NeoForge applies the cooldown.
@@ -47,7 +51,7 @@
 ./gradlew runData            # data gen
 ./gradlew runGameTestServer  # tests
 ```
-- Build output: `build/libs/vampire_spells_addon-1.21.1-0.0.4.jar`
+- Build output: `build/libs/vampire_spells_addon-1.21.1-0.0.5.jar`
 - Copy helper (if desired): `cp build/libs/vampire_spells_addon-*.jar ./VampireSpellsAddon.jar`
 
 ## Development Guardrails
@@ -63,18 +67,22 @@
 - [ ] Devour heals blood/mana in line with the config multipliers.
 - [ ] High-blood vampire casts spend blood and apply the high-blood cooldown multiplier.
 - [ ] Low-blood vampire casts skip the blood drain and apply the low-blood cooldown multiplier.
-- [ ] Non-vampires continue to cast normally without blood hooks.
+- [ ] Holy damage spells reflect damage back onto vampire casters.
+- [ ] Holy heals damage vampire casters/targets and the underlying heals are suppressed via `LivingHealEvent`.
+- [ ] Holy utility spells deal 5 damage to vampire casters and the cast is cancelled.
+- [ ] Non-vampires continue to cast normally without blood/holy penalties.
 - [ ] Reflection listeners register without logging errors.
-- [ ] Log output shows informative messages for blood gains/losses and cooldown adjustments.
+- [ ] Log output shows informative messages for blood gains/losses and holy backlash.
 
 ## Troubleshooting
 - **Missing parent mods**: Startup logs will report missing APIs; addon should fail gracefully.
 - **Unexpected blood usage**: verify threshold/config values; ensure Vampirism API method names still match (`getBloodStats`, `useBlood`).
+- **Holy backlash missing**: confirm `SpellDamageEvent`/`SpellHealEvent` listeners register (debug log) and that the spell ID is holy.
 - **Cooldown not scaling**: confirm the `SpellCooldownAddedEvent.Pre` listener registers (look for debug log).
 - **Devour mana unchanged**: confirm no other mods set the mana cost after our handler, or adjust `devourManaMultiplier`.
 
 ## Build Artifact Verification
 ```bash
-jar -tf build/libs/vampire_spells_addon-1.21.1-0.0.4.jar
+jar -tf build/libs/vampire_spells_addon-1.21.1-0.0.5.jar
 ```
 Expect only our package and NeoForge descriptors (`META-INF/neoforge.mods.toml`).
