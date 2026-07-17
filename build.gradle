@@ -1,3 +1,5 @@
+import java.util.zip.ZipFile
+
 plugins {
     id 'java-library'
     id 'idea'
@@ -46,15 +48,14 @@ runs {
 sourceSets.main.resources { srcDir 'src/generated/resources' }
 
 repositories {
-    flatDir {
-        dir 'libs'
-    }
-
     // Parent mods repositories
     maven { url = "https://maven.maxanier.de/releases" } // Vampirism
     maven { url = "https://code.redspace.io/releases" } // Iron's Spells
+    maven { url = "https://code.redspace.io/snapshots" } // Iron's Lib snapshots
 
     // Dependencies from parent mods
+    maven { url = "https://modmaven.dev" }
+    maven { url = "https://maven.minecraftforge.net" }
     maven { url = "https://maven.enginehub.org/repo/" }
     maven {
         url = "https://dl.cloudsmith.io/public/geckolib3/geckolib/maven/"
@@ -68,11 +69,36 @@ repositories {
     maven { url = "https://maven.kosmx.dev/" }
 }
 
+configurations {
+    runtimeClasspath.extendsFrom localRuntime
+}
+
 dependencies {
     // NEOFORGE
     implementation "net.neoforged:neoforge:${neo_version}"
 
-    // We'll compile without external dependencies and rely on runtime loading
+    // Parent mods stay off the compile classpath. localRuntime is used only by
+    // NeoGradle development launches and must never be bundled into this JAR.
+    localRuntime "io.redspace:irons_spellbooks:${irons_spells_runtime_version}"
+    localRuntime "de.teamlapen.vampirism:Vampirism:${vampirism_runtime_version}"
+
+    // Iron's Spells runtime dependencies are not exported by its published POM.
+    localRuntime "software.bernie.geckolib:geckolib-neoforge-${minecraft_version}:${geckolib_version}"
+    localRuntime "dev.kosmx.player-anim:player-animation-lib-forge:${player_animator_version}"
+    localRuntime "top.theillusivec4.curios:curios-neoforge:${curios_version}+${minecraft_version}"
+    localRuntime "io.redspace:irons_lib:${irons_lib_version}"
+}
+
+tasks.register('resolveParentRuntime') {
+    group = 'verification'
+    description = 'Resolves and downloads the parent mods used by NeoGradle development runs.'
+
+    doLast {
+        Set<File> resolved = configurations.localRuntime.resolve()
+        logger.lifecycle("Resolved ${resolved.size()} parent runtime artifacts.")
+        resolved.toSorted { left, right -> left.name <=> right.name }
+                .each { file -> logger.lifecycle(" - ${file.name}") }
+    }
 }
 
 tasks.withType(ProcessResources).configureEach {
@@ -91,7 +117,6 @@ tasks.withType(ProcessResources).configureEach {
             mod_description        : mod_description,
             mod_display_url        : mod_display_url,
             mod_issue_tracker      : mod_issue_tracker,
-            mod_logo_file          : mod_logo_file,
             vampirism_version      : vampirism_version,
             irons_spells_version   : irons_spells_version
     ]
@@ -111,9 +136,51 @@ jar {
                 "Implementation-Title"    : project.name,
                 "Implementation-Version"  : project.jar.archiveVersion,
                 "Implementation-Vendor"   : mod_authors,
-                "Implementation-Timestamp": new Date().format("yyyy-MM-dd'T'HH:mm:ssZ"),
         ])
     }
+}
+
+tasks.withType(AbstractArchiveTask).configureEach {
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
+def verifyJarContents = tasks.register('verifyJarContents') {
+    group = 'verification'
+    description = 'Checks that the distributable JAR contains only addon-owned code and expanded metadata.'
+    dependsOn tasks.named('jar')
+    inputs.file(tasks.named('jar').flatMap { it.archiveFile })
+
+    doLast {
+        File archive = tasks.named('jar', Jar).get().archiveFile.get().asFile
+
+        new ZipFile(archive).withCloseable { zip ->
+            List<String> names = Collections.list(zip.entries())*.name
+            List<String> forbidden = names.findAll { name ->
+                name.startsWith('io/redspace/') ||
+                        name.startsWith('de/teamlapen/') ||
+                        name.startsWith('net/neoforged/')
+            }
+
+            if (!forbidden.isEmpty()) {
+                throw new GradleException("Parent or NeoForge classes were bundled into ${archive.name}: ${forbidden}")
+            }
+
+            def metadata = zip.getEntry('META-INF/neoforge.mods.toml')
+            if (metadata == null) {
+                throw new GradleException("Missing META-INF/neoforge.mods.toml in ${archive.name}")
+            }
+
+            String metadataText = zip.getInputStream(metadata).getText('UTF-8')
+            if (metadataText.contains('${')) {
+                throw new GradleException("Unexpanded placeholders remain in ${archive.name}")
+            }
+        }
+    }
+}
+
+tasks.named('check') {
+    dependsOn verifyJarContents
 }
 
 java {

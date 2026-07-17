@@ -34,7 +34,7 @@ public class VampireSpellsAddon {
             }
 
             try {
-                Class.forName("io.redspace.ironsspellbooks.api.spells.ISpell");
+                Class.forName("io.redspace.ironsspellbooks.api.registry.SpellRegistry");
                 LOGGER.info("Iron's Spells API detected successfully");
             } catch (ClassNotFoundException e) {
                 LOGGER.error("Iron's Spells API not found! This addon requires Iron's Spells 'n Spellbooks to be installed.");

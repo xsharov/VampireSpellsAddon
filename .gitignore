@@ -30,8 +30,15 @@ Thumbs.db
 # Java
 *.class
 *.jar
-!VampireSpellsAddon.jar
+!gradle/wrapper/gradle-wrapper.jar
 hs_err_pid*
 
 # Generated Resources (optional - uncomment if you don't want to track generated data)
 # src/generated/resources/
+
+/dependency-source/
+
+# MemPalace local memory
+/.mempalace/
+/mempalace.yaml
+/entities.json
