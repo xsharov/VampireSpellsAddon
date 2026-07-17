@@ -110,6 +110,40 @@ tasks.register('resolveParentRuntime') {
     }
 }
 
+def gameTestServerLog = file('runs/gameTestServer/logs/latest.log')
+def verifyGameTestServerLog = tasks.register('verifyGameTestServerLog') {
+    group = 'verification'
+    description = 'Fails when the development server did not validate all reflective parent-mod contracts.'
+    outputs.upToDateWhen { false }
+
+    doLast {
+        if (!gameTestServerLog.isFile()) {
+            throw new GradleException("GameTest server did not create ${gameTestServerLog}")
+        }
+
+        String logText = gameTestServerLog.getText('UTF-8')
+        String successMarker = "Vampirism and Iron's Spells integration contracts validated successfully"
+        if (!logText.contains(successMarker)) {
+            throw new GradleException(
+                    "GameTest server did not validate the addon integration contracts. See ${gameTestServerLog}")
+        }
+    }
+}
+
+tasks.matching { it.name == 'runGameTestServer' }.configureEach {
+    doFirst {
+        // Avoid accepting a success marker left by an earlier development run.
+        if (gameTestServerLog.exists() && !gameTestServerLog.delete()) {
+            throw new GradleException("Could not remove stale GameTest server log ${gameTestServerLog}")
+        }
+    }
+    finalizedBy verifyGameTestServerLog
+}
+
+verifyGameTestServerLog.configure {
+    mustRunAfter 'runGameTestServer'
+}
+
 tasks.withType(ProcessResources).configureEach {
     var replaceProperties = [
             minecraft_version      : minecraft_version,
@@ -195,9 +229,10 @@ def verifyJarContents = tasks.register('verifyJarContents') {
             if (!metadataText.contains("modId = \"${mod_id}\"")) {
                 throw new GradleException("Expected mod id ${mod_id} is missing from ${archive.name}")
             }
-            if (!metadataText.contains("versionRange = \"${vampirism_version_range}\"")
+            if (!metadataText.contains("versionRange = \"${neo_version_range}\"")
+                    || !metadataText.contains("versionRange = \"${vampirism_version_range}\"")
                     || !metadataText.contains("versionRange = \"${irons_spells_version_range}\"")) {
-                throw new GradleException("Verified parent dependency ranges are missing from ${archive.name}")
+                throw new GradleException("Verified dependency ranges are missing from ${archive.name}")
             }
 
             String expectedVersion = project.version.toString()
