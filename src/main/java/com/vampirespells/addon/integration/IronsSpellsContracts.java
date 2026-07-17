@@ -32,6 +32,9 @@ record Contracts(
         Class<?> abstractSpell = requireType(SPELLS + "AbstractSpell");
         Class<?> damageSource = requireType("io.redspace.ironsspellbooks.damage.SpellDamageSource");
         Class<?> magicData = requireType(API + "magic.MagicData");
+        Class<?> playerRecasts = requireType(
+                "io.redspace.ironsspellbooks.capabilities.magic.PlayerRecasts"
+        );
         Class<?> registry = requireType(API + "registry.SpellRegistry");
 
         requireAssignable(DamageSource.class, damageSource);
@@ -44,7 +47,7 @@ record Contracts(
 
         return new Contracts(
                 resolvePre(schoolType, castSourceType),
-                resolveOnCast(),
+                resolveOnCast(schoolType, castSourceType),
                 resolveCooldown(abstractSpell),
                 resolveDamage(damageSource),
                 resolveHeal(schoolType),
@@ -62,7 +65,9 @@ record Contracts(
                 new Magic(
                         magicForEntity,
                         requireMethod(magicData, "getMana", float.class),
-                        requireMethod(magicData, "resetAdditionalCastData", void.class)
+                        requireMethod(magicData, "resetAdditionalCastData", void.class),
+                        requireMethod(magicData, "getPlayerRecasts", playerRecasts),
+                        requireMethod(playerRecasts, "hasRecastForSpell", boolean.class, String.class)
                 ),
                 castSourceType,
                 requireMethod(castSourceType, "consumesMana", boolean.class)
@@ -84,7 +89,8 @@ record Contracts(
         );
     }
 
-    private static OnCast resolveOnCast() throws ReflectiveOperationException {
+    private static OnCast resolveOnCast(Class<?> school, Class<?> source)
+            throws ReflectiveOperationException {
         Class<?> type = requireType(EVENTS + "SpellOnCastEvent");
         requireAssignable(PlayerEvent.class, type);
         return new OnCast(
@@ -92,6 +98,8 @@ record Contracts(
                 requireMethod(type, "getSpellId", String.class),
                 requireMethod(type, "getManaCost", int.class),
                 requireMethod(type, "setManaCost", void.class, int.class),
+                requireMethod(type, "getSchoolType", school),
+                requireMethod(type, "getCastSource", source),
                 requireMethod(type, "getEntity", Player.class)
         );
     }
@@ -138,7 +146,8 @@ record Contracts(
     }
 
     record OnCast(
-            Class<?> type, Method spellId, Method manaCost, Method setManaCost, Method entity
+            Class<?> type, Method spellId, Method manaCost, Method setManaCost,
+            Method school, Method castSource, Method entity
     ) {
     }
 
@@ -162,7 +171,10 @@ record Contracts(
     ) {
     }
 
-    record Magic(Method forEntity, Method mana, Method resetAdditionalCastData) {
+    record Magic(
+            Method forEntity, Method mana, Method resetAdditionalCastData,
+            Method playerRecasts, Method hasRecast
+    ) {
     }
 
     private static Class<?> requireType(String name) throws ReflectiveOperationException {

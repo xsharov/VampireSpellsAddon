@@ -55,11 +55,13 @@ declares NeoForge `21.1.200` as its own minimum. The addon therefore uses
 `21.1.200` as the lowest installable runtime combination instead of advertising
 a combination that the parent-mod ecosystem rejects during loading.
 
-## Verified reflective contracts
+## Verified runtime contracts
 
-The addon still compiles only against Minecraft and NeoForge. At startup it
+The addon still has no parent mod on its compile classpath. At startup it
 resolves the parent-mod contracts once, registers parent events dynamically,
-and fails closed with one diagnostic if a required contract is missing.
+and fails closed with one diagnostic if a required contract is missing. Its
+two string-targeted mixins compile against the Mixin/MixinExtras APIs supplied
+by NeoForge and never import an Iron's Spells class.
 
 Iron's Spells contracts checked in source:
 
@@ -71,7 +73,19 @@ Iron's Spells contracts checked in source:
 - `AbstractSpell#getSpellResource()`, `getSchoolType()`, and
   `getManaCost(int)`; `SchoolType#getId()`.
 - `CastSource#consumesMana()`, `MagicData#getPlayerMagicData(LivingEntity)`,
-  `getMana()`, and `resetAdditionalCastData()`.
+  `getMana()`, `resetAdditionalCastData()`, and `getPlayerRecasts()`.
+- `SpellOnCastEvent#getSchoolType()` and `getCastSource()`;
+  `PlayerRecasts#hasRecastForSpell(String)`.
+
+Iron's Spells transformation targets checked in the current and compatibility-
+floor artifacts:
+
+- the single `CastSource#consumesMana()` expression in
+  `AbstractSpell#canBeCastedBy`;
+- the `SpellOnCastEvent` bus post in `AbstractSpell#castSpell`, before its mana
+  debit and spell effect;
+- the stored `deltaUV` float in client
+  `SpellRenderingHelper#renderRayOfSiphoning`.
 
 Vampirism contracts checked in source:
 
@@ -96,6 +110,7 @@ spell.checkPreCastConditions
 -> SpellPreCastEvent
 -> channel/cast start
 -> SpellOnCastEvent
+-> addon unpaid-blood abort hook
 -> Iron's Spells mana debit
 -> spell implementation
 -> SpellCooldownAddedEvent.Pre
@@ -126,12 +141,24 @@ SpellHealEvent
   containers. The bridge now requires the four-argument overload available at
   the supported floor and fails closed if it is missing.
 - Devour's mana multiplier previously affected non-vampires and ran after the
-  original affordability decision. It is now vampire-only and has a scaled
-  pre-cast affordability guard.
-- Blood thresholds previously used integer rounding, while decisions could
-  become stale between pre-cast, cast and cooldown events. The threshold is now
-  an exact fractional comparison; cost and outcome are committed from the
-  final `SpellOnCastEvent` mana cost and correlated only for a short lifetime.
+  original affordability decision. It remains vampire-only; its scaled price
+  now participates in the same mana-first/blood-fallback selection as every
+  non-Ray Blood School spell.
+- The old eight-spell allowlist and high/low-blood threshold could leave Blood
+  School coverage incomplete and charge both resources. Classification now
+  uses `SchoolType#getId()`. A vampire normally pays mana, falls back to an
+  atomic blood-only debit when the full price cannot be covered, and can opt
+  into unconditional blood-only casting through server config. Ray remains a
+  mana-consuming blood-restoration exception.
+- Iron's Spells rejects an insufficient-mana cast before `SpellPreCastEvent`,
+  while `SpellOnCastEvent` is too late to cancel normally. A narrow mixin keeps
+  every other pre-cast check intact, lets eligible fallback reach the event,
+  and stops an unpaid outcome immediately after `SpellOnCastEvent` but before
+  the mana debit or spell effect.
+- Vampire Blood School cooldowns now share one configurable multiplier,
+  defaulting to `2/3`, instead of depending on a transient blood threshold.
+- Ray's client beam UV now flows toward vampire player casters, and its guide
+  override carries the new lore across all 15 Iron's Spells locales.
 - Holy damage doubling for Vampirism NPCs was accidentally nested under the
   vampire-player caster path. Target doubling is now independent of the caster,
   and caster reflection uses delivered holy health damage instead of the early
@@ -141,14 +168,11 @@ SpellHealEvent
   creates a target-area entity. Cancellation now calls
   `MagicData#resetAdditionalCastData()`, whose cast-data reset discards that
   entity.
-- Pending holy-heal suppression and blood-cast decisions previously had no
-  complete lifecycle. Heal tokens now have tight tick correlation. Blood
-  decisions normally expire in the cast tick, while Raise Dead retains its
-  decision for the bounded ten-minute recast window so its delayed cooldown is
-  still adjusted. That one delayed decision is stored in NeoForge's persisted
-  player NBT and its remaining lifetime advances only while the player is
-  online, matching the parent recast across dimension changes, relogging, and
-  server restarts. Transient state is purged on logout/clone and server shutdown.
+- Pending holy-heal suppression previously had no complete lifecycle. Heal
+  tokens now have tight tick correlation. Resource replacement no longer needs
+  persistent Raise Dead state because upstream recasts are detected directly;
+  nested cast outcomes use a bounded thread-local LIFO and are consumed in the
+  matching `castSpell` frame.
 - Reflection used concrete runtime classes in hot paths and retained an unsafe
   one-argument listener-registration fallback. Contracts are now resolved
   against API interfaces once, listeners use the verified four-argument
@@ -181,12 +205,13 @@ gameplay run with both parent mods loaded.
 - Holy-heal suppression correlates target, amount and server tick. A third-party
   mod that rewrites or defers the heal can intentionally break that match; the
   token expires instead of suppressing an unrelated future heal.
-- Devour's scaled affordability guard follows Iron's normal non-creative,
-  mana-consuming path. Iron's optional `creativeMana` policy is internal rather
-  than part of the public event contract, so a creative vampire with that option
-  enabled is still checked only against Iron's original cost. A third-party
-  listener that changes Devour mana later in `SpellOnCastEvent` can likewise
-  make the final debit differ from the pre-cast estimate.
+- The pre-cast affordability estimate cannot see third-party changes made later
+  in `SpellOnCastEvent`. The final price is authoritative, so a late increase
+  can switch the cast to blood or deny it and a late decrease can retain mana.
+- Mana fallback and Ray UV reversal depend on narrow mixin injection points.
+  Every Iron's Spells update must recheck the invocation targets and Ray float-
+  local ordinal in both the current and compatibility-floor artifacts, then
+  smoke-load the matching server/client side.
 - The Vampirism `1.10.13` source snapshot was not the published development
   artifact at audit time. Re-check Maven availability and compare the exact
   release commit before changing the runtime version.
@@ -201,10 +226,12 @@ versions on a client and a dedicated server. Cover at least:
 
 - vampire and non-vampire casters;
 - Vampirism NPC vampires and ordinary living targets;
-- high, low and insufficient blood; creative and non-creative mana paths;
+- sufficient and insufficient mana; default fallback and forced blood-only
+  mode; sufficient and insufficient blood; creative and non-mana cast sources;
 - instant, channeled, interrupted and repeated casts;
 - Ray and Devour with armor, absorption, lethal overkill and a full blood bar;
-- all eight blood-cost spells at multiple levels;
+- all ten Blood School spells at multiple levels, including Ray's exception;
+- Ray UV direction for local and remote vampire/non-vampire players;
 - holy damage, self-heal, targeted heal, area heal, utility cancellation and
   friendly fire;
 - logout, death and dimension transition while cast state is pending.
@@ -238,9 +265,12 @@ The following automated checks completed successfully on Java 21:
   functions were given!` stop because this repository has no GameTests; Gradle
   reported `BUILD SUCCESSFUL`. The new log finalizer rejects launches that stop
   before contract validation, even when NeoGradle itself returns success.
+- Debug logs confirm the required core mixin was discovered and applied to
+  `AbstractSpell` for both parent pairs. The client injection descriptor and
+  float-local ordinal were also checked in both published Iron's Spells JARs.
 - Manual JAR listing confirmed only addon-owned classes, expanded dependency
-  ranges, matching `1.21.1-0.0.6` metadata/manifest versions, and the packaged
-  MIT license.
+  ranges, matching `1.21.1-0.0.6` metadata/manifest versions, both required
+  mixin configs, all 15 language overrides, and the packaged MIT license.
 
 These checks validate build, packaging, dedicated-server class loading, and
 reflection resolution. They do not replace the client and gameplay matrix

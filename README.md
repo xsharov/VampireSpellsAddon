@@ -4,9 +4,10 @@ Vampire Spells Addon is a NeoForge compatibility mod for Minecraft 1.21.1. It
 connects Iron's Spells 'n Spellbooks with Vampirism and changes selected spell
 behavior for vampire players.
 
-The integration is reflection-based: the addon compiles without either parent
-mod on its compile classpath, loads their APIs only at runtime, and does not
-package parent-mod classes in its JAR.
+The integration compiles without either parent mod on its compile classpath,
+loads their APIs only at runtime, and does not package parent-mod classes in its
+JAR. Reflection handles the parent APIs, while two narrowly scoped runtime
+mixins replace the mana gate and reverse the Ray animation.
 
 ## Current behavior
 
@@ -14,25 +15,32 @@ package parent-mod classes in its JAR.
   caster from delivered health damage. The amount is observed after absorption
   and other damage processing, excludes overkill by capping it to the target's
   health before the hit, and never requests more blood than the caster can hold.
-- Devour's configurable mana-cost multiplier applies only to vampire casters.
-  The addon performs an additional pre-cast affordability check against the
-  scaled cost before Iron's Spells debits mana.
-- Eight blood spells spend additional blood above an exact configurable blood
-  ratio and use different high/low-blood cooldown multipliers. Blood cost is
-  calculated from the final `SpellOnCastEvent` mana cost, and blood is committed
-  only once the cast reaches that event. The normal Iron's Spells mana cost is
-  still charged.
+- By default, a vampire pays mana for every mana-consuming Blood School spell.
+  When the full mana price cannot be covered, every such spell except Ray of
+  Siphoning falls back to an atomic blood payment and spends no mana. If the
+  blood price cannot be paid in full, the spell effect is stopped without a
+  partial debit.
+- `alwaysUseBloodForVampireBloodSpells = true` changes those non-Ray casts to
+  blood-only mode even while mana is available. Creative casts, non-mana cast
+  sources, and recasts keep their normal free-resource behavior. Ray of
+  Siphoning always keeps its normal mana cost and continues to restore blood.
+- Devour's configurable mana multiplier still applies only to vampire casters;
+  its scaled final price is also the basis for a blood payment. Every Blood
+  School spell cast by a vampire uses
+  `vampireBloodSpellCooldownMultiplier`, which defaults to `2/3` for a
+  cooldown that is 1.5 times shorter.
+- A vampire's Ray of Siphoning animates toward the caster rather than toward the
+  target. Its guide text also explains the spell's night-creature origin in all
+  languages supported by Iron's Spells.
 - Holy spell damage dealt to a Vampirism NPC vampire is doubled regardless of
   who cast it. Delivered holy health damage reflects onto a vampire player
   caster.
 - Holy healing damages vampire casters/targets and suppresses the corresponding
   heal. Holy utility spells damage a vampire caster, clear any targeting data
   created during pre-cast checks, and cancel the cast.
-- Cast and heal correlation state is bounded by the relevant immediate or
-  Raise Dead recast lifetime. The delayed Raise Dead decision persists across
-  dimension changes, relogging, and server restarts while its upstream recast is
-  active; transient state is cleared on lifecycle boundaries so interrupted
-  casts cannot affect an unrelated later action.
+- Cast and heal correlation state is bounded and cleared on lifecycle
+  boundaries so nested or interrupted actions cannot affect an unrelated later
+  action.
 - Server-side tuning is generated in
   `config/vampire_spells_addon-server.toml`.
 
@@ -73,8 +81,10 @@ build/libs/vampire_spells_addon-neoforge-<version>.jar
 ```
 
 `build` also checks the expanded mod metadata, manifest and archive versions,
-packaged license, and absence of bundled parent-mod or NeoForge classes. Unit
-tests cover the deterministic blood and scaling calculations.
+packaged license, mixin resources, localized Ray descriptions, and absence of
+bundled parent-mod or NeoForge classes. Unit tests cover deterministic resource
+selection, blood and cooldown calculations, nested cast outcomes, and language
+resource structure.
 `runGameTestServer` additionally fails unless the development server logs a
 successful validation of every reflective parent-mod contract. CI runs that
 class-loading smoke check against both the current and compatibility-floor

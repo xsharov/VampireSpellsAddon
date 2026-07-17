@@ -23,11 +23,19 @@ class BloodMechanicsTest {
     }
 
     @Test
-    void comparesFractionalThresholdWithoutIntegerRounding() {
-        assertFalse(BloodMechanics.isHighBlood(6, 20, 0.31));
-        assertTrue(BloodMechanics.isHighBlood(7, 20, 0.31));
-        assertTrue(BloodMechanics.isHighBlood(0, 20, 0));
-        assertFalse(BloodMechanics.isHighBlood(20, 0, 0));
+    void selectsBloodForConfiguredOrInsufficientManaPaths() {
+        assertTrue(BloodMechanics.shouldUseBlood(true, 100, 25));
+        assertTrue(BloodMechanics.shouldUseBlood(false, 24.9f, 25));
+        assertFalse(BloodMechanics.shouldUseBlood(false, 25, 25));
+        assertFalse(BloodMechanics.shouldUseBlood(false, 0, 0));
+        assertTrue(BloodMechanics.shouldUseBlood(false, Float.NaN, 25));
+    }
+
+    @Test
+    void requiresTheFullAtomicBloodCost() {
+        assertTrue(BloodMechanics.canAffordBlood(5, 5));
+        assertFalse(BloodMechanics.canAffordBlood(4, 5));
+        assertFalse(BloodMechanics.canAffordBlood(5, -1));
     }
 
     @Test
@@ -37,6 +45,7 @@ class BloodMechanicsTest {
         assertEquals(50, BloodMechanics.scaleManaCost(25, 2));
         assertEquals(0, BloodMechanics.scaleManaCost(25, 0));
         assertEquals(10, BloodMechanics.scaleCooldown(20, 0.5));
+        assertEquals(200, BloodMechanics.scaleCooldown(300, 2d / 3d));
         assertEquals(Integer.MAX_VALUE, BloodMechanics.scaleCooldown(Integer.MAX_VALUE, 10));
     }
 }

@@ -14,55 +14,36 @@ import net.minecraft.world.entity.player.Player;
 
 final class BloodSpellHandler {
 
-    private static final float MANA_EPSILON = 0.0001f;
-    private static final int IMMEDIATE_COOLDOWN_LIFETIME_TICKS = 0;
-    // RaiseDeadSpell currently gives recasts a hard-coded 10-minute lifetime.
-    // Keep this in sync with upstream; the margin lets its timeout cooldown fire first.
-    private static final int RAISE_DEAD_RECAST_LIFETIME_TICKS = 20 * 60 * 10 + 20;
-
-    private final CastStateTracker state;
-
-    BloodSpellHandler(CastStateTracker state) {
-        this.state = state;
-    }
-
     void onSpellPreCast(Object event) {
         Player caster = IronsSpellsBridge.player(event);
         ResourceLocation spellId = IronsSpellsBridge.spellId(event);
-        if (!isServerPlayer(caster) || !SpellIds.DEVOUR.equals(spellId)) {
+        if (!isResourceReplacementCandidate(event, caster, spellId)
+                || IronsSpellsBridge.hasRecast(caster, spellId)) {
+            return;
+        }
+
+        int manaCost = BloodCastHooks.adjustedManaCost(
+                spellId,
+                IronsSpellsBridge.spellManaCost(spellId, IronsSpellsBridge.spellLevel(event))
+        );
+        if (!usesBlood(caster, manaCost)) {
             return;
         }
 
         VampirismBridge.VampireContext vampire = VampirismBridge.vampire(caster);
-        Object castSource = IronsSpellsBridge.castSource(event);
-        if (!vampire.isVampire()
-                || caster.isCreative()
-                || !IronsSpellsBridge.consumesMana(castSource)) {
-            return;
-        }
-
-        int baseManaCost = IronsSpellsBridge.spellManaCost(spellId, IronsSpellsBridge.spellLevel(event));
-        int adjustedManaCost = BloodMechanics.scaleManaCost(
-                baseManaCost,
-                AddonConfig.DEVOUR_MANA_MULTIPLIER.get()
-        );
-        if (IronsSpellsBridge.currentMana(caster) + MANA_EPSILON >= adjustedManaCost) {
+        int bloodCost = calculateBloodCost(manaCost);
+        if (BloodMechanics.canAffordBlood(vampire.bloodLevel(), bloodCost)) {
             return;
         }
 
         if (IronsSpellsBridge.cancelPreCast(event)) {
             IronsSpellsBridge.resetAdditionalCastData(caster);
-            caster.displayClientMessage(
-                    Component.translatable(
-                            "ui.irons_spellbooks.cast_error_mana",
-                            Component.translatable("spell.irons_spellbooks.devour")
-                    ).withStyle(ChatFormatting.RED),
-                    true
-            );
+            showInsufficientBlood(caster);
             VampireSpellsAddon.LOGGER.debug(
-                    "Prevented Devour cast by vampire {}: {} mana required",
+                    "Prevented Blood School cast {} by vampire {}: {} blood required",
+                    spellId,
                     caster.getName().getString(),
-                    adjustedManaCost
+                    bloodCost
             );
         }
     }
@@ -74,80 +55,29 @@ final class BloodSpellHandler {
             return;
         }
 
-        VampirismBridge.VampireContext vampire = VampirismBridge.vampire(caster);
-        if (SpellIds.DEVOUR.equals(spellId)) {
-            if (vampire.isVampire()) {
-                adjustDevourManaCost(event, caster);
-            }
-            return;
-        }
-
-        if (!SpellIds.BLOOD_COST_SPELLS.contains(spellId)) {
-            return;
-        }
-        if (!vampire.isVampire()) {
-            state.removeBloodDecision(caster, spellId);
-            return;
-        }
-
-        int bloodCost = calculateBloodCost(IronsSpellsBridge.manaCost(event));
-        boolean highBlood = BloodMechanics.isHighBlood(
-                vampire.bloodLevel(),
-                vampire.maxBlood(),
-                AddonConfig.HIGH_BLOOD_THRESHOLD_FRACTION.get()
-        );
-        boolean spentBlood = highBlood && bloodCost > 0 && vampire.consumeBlood(bloodCost);
-        boolean highOutcome = highBlood && (bloodCost == 0 || spentBlood);
-        double cooldownMultiplier = highOutcome
-                ? nonNegative(AddonConfig.HIGH_BLOOD_COOLDOWN_MULTIPLIER.get())
-                : nonNegative(AddonConfig.LOW_BLOOD_COOLDOWN_MULTIPLIER.get());
-
-        CastStateTracker.BloodCastDecision decision = new CastStateTracker.BloodCastDecision(
-                spentBlood,
-                bloodCost,
-                cooldownMultiplier
-        );
-        state.storeBloodDecision(
-                caster,
-                spellId,
-                decision,
-                serverTick(caster),
-                decisionLifetime(spellId)
-        );
-
-        VampireSpellsAddon.LOGGER.debug(
-                "Blood cast {} by {}: highBlood={}, spentBlood={}, cost={}, cooldownMultiplier={}",
-                spellId,
-                caster.getName().getString(),
-                highBlood,
-                spentBlood,
-                bloodCost,
-                cooldownMultiplier
-        );
+        boolean denied = handleSpellOnCast(event, caster, spellId);
+        BloodCastHooks.recordCastOutcome(caster, spellId, denied);
     }
 
     void onSpellCooldown(Object event) {
         Player caster = IronsSpellsBridge.player(event);
-        ResourceLocation spellId = IronsSpellsBridge.spellId(event);
-        if (!isServerPlayer(caster) || spellId == null) {
-            return;
-        }
-
-        CastStateTracker.BloodCastDecision decision = state.removeBloodDecision(caster, spellId);
-        if (decision == null) {
+        if (!isServerPlayer(caster)
+                || !IronsSpellsBridge.isBloodSchool(IronsSpellsBridge.school(event))
+                || !VampirismBridge.vampire(caster).isVampire()) {
             return;
         }
 
         int current = IronsSpellsBridge.cooldown(event);
-        int adjusted = BloodMechanics.scaleCooldown(current, decision.cooldownMultiplier());
-        if (IronsSpellsBridge.setCooldown(event, adjusted)) {
+        int adjusted = BloodMechanics.scaleCooldown(
+                current,
+                AddonConfig.VAMPIRE_BLOOD_SPELL_COOLDOWN_MULTIPLIER.get()
+        );
+        if (adjusted != current && IronsSpellsBridge.setCooldown(event, adjusted)) {
             VampireSpellsAddon.LOGGER.debug(
-                    "Adjusted cooldown for {} by {} ({} -> {}, spentBlood={})",
-                    spellId,
+                    "Adjusted vampire Blood School cooldown for {} ({} -> {})",
                     caster.getName().getString(),
                     current,
-                    adjusted,
-                    decision.spentBlood()
+                    adjusted
             );
         }
     }
@@ -193,12 +123,89 @@ final class BloodSpellHandler {
         }
     }
 
+    private static boolean handleSpellOnCast(
+            Object event,
+            Player caster,
+            ResourceLocation spellId
+    ) {
+        VampirismBridge.VampireContext vampire = VampirismBridge.vampire(caster);
+        if (!vampire.isVampire()) {
+            return false;
+        }
+
+        if (SpellIds.DEVOUR.equals(spellId)) {
+            adjustDevourManaCost(event, caster);
+        }
+
+        if (!isResourceReplacementCandidate(event, caster, spellId)
+                || IronsSpellsBridge.hasRecast(caster, spellId)) {
+            return false;
+        }
+
+        int manaCost = Math.max(0, IronsSpellsBridge.manaCost(event));
+        if (!usesBlood(caster, manaCost)) {
+            return false;
+        }
+
+        int bloodCost = calculateBloodCost(manaCost);
+        if (!IronsSpellsBridge.setManaCost(event, 0)) {
+            VampireSpellsAddon.LOGGER.error(
+                    "Blocked Blood School cast {} because its mana cost could not be replaced",
+                    spellId
+            );
+            return true;
+        }
+
+        boolean paid = bloodCost == 0 || vampire.consumeBlood(bloodCost);
+        if (!paid) {
+            showInsufficientBlood(caster);
+            VampireSpellsAddon.LOGGER.debug(
+                    "Blocked completed Blood School cast {} by vampire {}: {} blood required",
+                    spellId,
+                    caster.getName().getString(),
+                    bloodCost
+            );
+            return true;
+        }
+
+        VampireSpellsAddon.LOGGER.debug(
+                "Replaced {} mana with {} blood for vampire Blood School cast {} by {}",
+                manaCost,
+                bloodCost,
+                spellId,
+                caster.getName().getString()
+        );
+        return false;
+    }
+
+    private static boolean isResourceReplacementCandidate(
+            Object event,
+            Player caster,
+            ResourceLocation spellId
+    ) {
+        return isServerPlayer(caster)
+                && !caster.isCreative()
+                && spellId != null
+                && !SpellIds.RAY_OF_SIPHONING.equals(spellId)
+                && IronsSpellsBridge.isBloodSchool(IronsSpellsBridge.school(event))
+                && IronsSpellsBridge.consumesMana(IronsSpellsBridge.castSource(event))
+                && VampirismBridge.vampire(caster).isVampire();
+    }
+
+    private static boolean usesBlood(Player caster, int manaCost) {
+        return BloodMechanics.shouldUseBlood(
+                AddonConfig.ALWAYS_USE_BLOOD_FOR_VAMPIRE_BLOOD_SPELLS.get(),
+                IronsSpellsBridge.currentMana(caster),
+                manaCost
+        );
+    }
+
     private static void adjustDevourManaCost(Object event, Player caster) {
         int current = IronsSpellsBridge.manaCost(event);
-        int adjusted = BloodMechanics.scaleManaCost(current, AddonConfig.DEVOUR_MANA_MULTIPLIER.get());
+        int adjusted = BloodCastHooks.adjustedManaCost(SpellIds.DEVOUR, current);
         if (adjusted != current && IronsSpellsBridge.setManaCost(event, adjusted)) {
             VampireSpellsAddon.LOGGER.debug(
-                    "Adjusted Devour mana cost for vampire {} ({} -> {})",
+                    "Adjusted Devour mana price for vampire {} ({} -> {})",
                     caster.getName().getString(),
                     current,
                     adjusted
@@ -216,21 +223,15 @@ final class BloodSpellHandler {
         );
     }
 
+    private static void showInsufficientBlood(Player caster) {
+        caster.displayClientMessage(
+                Component.translatable("text.vampirism.container.not_enough_blood")
+                        .withStyle(ChatFormatting.RED),
+                true
+        );
+    }
+
     private static boolean isServerPlayer(Player player) {
         return player != null && !player.level().isClientSide();
-    }
-
-    private static int serverTick(Player player) {
-        return player.getServer() == null ? player.tickCount : player.getServer().getTickCount();
-    }
-
-    private static int decisionLifetime(ResourceLocation spellId) {
-        return SpellIds.RAISE_DEAD.equals(spellId)
-                ? RAISE_DEAD_RECAST_LIFETIME_TICKS
-                : IMMEDIATE_COOLDOWN_LIFETIME_TICKS;
-    }
-
-    private static double nonNegative(double value) {
-        return Double.isFinite(value) ? Math.max(0d, value) : 0d;
     }
 }

@@ -11,9 +11,8 @@ public final class AddonConfig {
     public static final ModConfigSpec.IntValue BLOOD_COST_MANA_FLOOR;
     public static final ModConfigSpec.IntValue BLOOD_COST_MANA_CEILING;
 
-    public static final ModConfigSpec.DoubleValue HIGH_BLOOD_THRESHOLD_FRACTION;
-    public static final ModConfigSpec.DoubleValue HIGH_BLOOD_COOLDOWN_MULTIPLIER;
-    public static final ModConfigSpec.DoubleValue LOW_BLOOD_COOLDOWN_MULTIPLIER;
+    public static final ModConfigSpec.BooleanValue ALWAYS_USE_BLOOD_FOR_VAMPIRE_BLOOD_SPELLS;
+    public static final ModConfigSpec.DoubleValue VAMPIRE_BLOOD_SPELL_COOLDOWN_MULTIPLIER;
 
     public static final ModConfigSpec.DoubleValue DEVOUR_MANA_MULTIPLIER;
     public static final ModConfigSpec.DoubleValue DEVOUR_BLOOD_RESTORE_MULTIPLIER;
@@ -44,15 +43,16 @@ public final class AddonConfig {
                 .comment("Blood cost ratio applied to spells at or above the mana ceiling (blood per mana).")
                 .defineInRange("bloodCostRatioMax", 0.05d, 0d, 5d);
 
-        HIGH_BLOOD_THRESHOLD_FRACTION = builder
-                .comment("Fraction of maximum blood required to enter the high-blood casting state.")
-                .defineInRange("highBloodThresholdFraction", 0.5d, 0d, 1d);
-        HIGH_BLOOD_COOLDOWN_MULTIPLIER = builder
-                .comment("Cooldown multiplier applied when the caster has at least the configured high-blood threshold.")
-                .defineInRange("highBloodCooldownMultiplier", 0.5d, 0d, 10d);
-        LOW_BLOOD_COOLDOWN_MULTIPLIER = builder
-                .comment("Cooldown multiplier applied when the caster is below the high-blood threshold and casts without spending blood.")
-                .defineInRange("lowBloodCooldownMultiplier", 2d, 0d, 10d);
+        ALWAYS_USE_BLOOD_FOR_VAMPIRE_BLOOD_SPELLS = builder
+                .comment(
+                        "When true, vampire players always replace mana with blood for Blood School spells.",
+                        "When false, blood is used only when current mana cannot cover the full mana cost.",
+                        "Ray of Siphoning, creative players, non-mana cast sources, and recasts are excluded."
+                )
+                .define("alwaysUseBloodForVampireBloodSpells", false);
+        VAMPIRE_BLOOD_SPELL_COOLDOWN_MULTIPLIER = builder
+                .comment("Cooldown multiplier for every Blood School spell cast by a vampire player.")
+                .defineInRange("vampireBloodSpellCooldownMultiplier", 2d / 3d, 0d, 10d);
 
         DEVOUR_MANA_MULTIPLIER = builder
                 .comment("Mana cost multiplier applied to Devour for vampire players.")

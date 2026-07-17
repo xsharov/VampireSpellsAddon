@@ -21,6 +21,8 @@ public final class IronsSpellsBridge {
 
     private static final ResourceLocation HOLY_SCHOOL =
             ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "holy");
+    private static final ResourceLocation BLOOD_SCHOOL =
+            ResourceLocation.fromNamespaceAndPath("irons_spellbooks", "blood");
     private static final Object FAILED_INVOCATION = new Object();
     private static final Object RESOLUTION_LOCK = new Object();
     private static final AtomicBoolean DIAGNOSTIC_REPORTED = new AtomicBoolean();
@@ -131,6 +133,13 @@ public final class IronsSpellsBridge {
         if (resolved.pre().type().isInstance(event)) {
             return requiredValue(resolved, resolved.pre().school(), event);
         }
+        if (resolved.onCast().type().isInstance(event)) {
+            return requiredValue(resolved, resolved.onCast().school(), event);
+        }
+        if (resolved.cooldown().type().isInstance(event)) {
+            Object spell = requiredValue(resolved, resolved.cooldown().spell(), event);
+            return spell == null ? null : requiredValue(resolved, resolved.spell().school(), spell);
+        }
         if (resolved.heal().type().isInstance(event)) {
             return requiredValue(resolved, resolved.heal().school(), event);
         }
@@ -145,6 +154,9 @@ public final class IronsSpellsBridge {
         }
         if (resolved.pre().type().isInstance(event)) {
             return requiredValue(resolved, resolved.pre().castSource(), event);
+        }
+        if (resolved.onCast().type().isInstance(event)) {
+            return requiredValue(resolved, resolved.onCast().castSource(), event);
         }
         return null;
     }
@@ -263,6 +275,29 @@ public final class IronsSpellsBridge {
         return resolved != null && isHolySchool(resolved, school);
     }
 
+    public static boolean isBloodSchool(Object school) {
+        Contracts resolved = activeContracts();
+        return resolved != null && hasSchoolId(resolved, school, BLOOD_SCHOOL);
+    }
+
+    /** Returns whether an opaque AbstractSpell handle belongs to the Blood School. */
+    public static boolean isBloodSpell(Object spell) {
+        Contracts resolved = activeContracts();
+        if (resolved == null || !resolved.spell().type().isInstance(spell)) {
+            return false;
+        }
+        Object school = requiredValue(resolved, resolved.spell().school(), spell);
+        return school != null && hasSchoolId(resolved, school, BLOOD_SCHOOL);
+    }
+
+    /** Returns the resource id of an opaque AbstractSpell handle. */
+    public static ResourceLocation spellResource(Object spell) {
+        Contracts resolved = activeContracts();
+        return resolved != null && resolved.spell().type().isInstance(spell)
+                ? spellId(resolved, spell)
+                : null;
+    }
+
     /** Looks up the configured spell mana cost through SpellRegistry. */
     public static int spellManaCost(ResourceLocation spellId, int spellLevel) {
         Contracts resolved = activeContracts();
@@ -280,6 +315,24 @@ public final class IronsSpellsBridge {
         }
         Object magicData = requiredValue(resolved, resolved.magic().forEntity(), null, entity);
         return magicData == null ? 0f : floatValue(resolved, resolved.magic().mana(), magicData);
+    }
+
+    public static boolean hasRecast(LivingEntity entity, ResourceLocation spellId) {
+        Contracts resolved = activeContracts();
+        if (resolved == null || entity == null || spellId == null) {
+            return false;
+        }
+        Object magicData = requiredValue(resolved, resolved.magic().forEntity(), null, entity);
+        if (magicData == null) {
+            return false;
+        }
+        Object recasts = requiredValue(resolved, resolved.magic().playerRecasts(), magicData);
+        return recasts != null && booleanValue(
+                resolved,
+                resolved.magic().hasRecast(),
+                recasts,
+                spellId.toString()
+        );
     }
 
     public static boolean resetAdditionalCastData(LivingEntity entity) {
@@ -337,13 +390,21 @@ public final class IronsSpellsBridge {
     }
 
     private static boolean isHolySchool(Contracts resolved, Object school) {
+        return hasSchoolId(resolved, school, HOLY_SCHOOL);
+    }
+
+    private static boolean hasSchoolId(
+            Contracts resolved,
+            Object school,
+            ResourceLocation expectedId
+    ) {
         if (!resolved.spell().schoolType().isInstance(school)) {
             return false;
         }
         ResourceLocation id = typedValue(
                 resolved, resolved.spell().schoolId(), school, ResourceLocation.class
         );
-        return HOLY_SCHOOL.equals(id);
+        return expectedId.equals(id);
     }
 
     private static int intValue(Contracts resolved, Method method, Object target, Object... arguments) {

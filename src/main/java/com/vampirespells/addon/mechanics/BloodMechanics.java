@@ -2,6 +2,8 @@ package com.vampirespells.addon.mechanics;
 
 public final class BloodMechanics {
 
+    private static final float MANA_EPSILON = 0.0001f;
+
     private BloodMechanics() {
     }
 
@@ -32,12 +34,18 @@ public final class BloodMechanics {
         return ceilToInt(manaCost * ratio);
     }
 
-    public static boolean isHighBlood(int currentBlood, int maximumBlood, double thresholdFraction) {
-        if (maximumBlood <= 0 || currentBlood < 0) {
+    public static boolean shouldUseBlood(boolean alwaysUseBlood, float currentMana, int manaCost) {
+        if (alwaysUseBlood) {
+            return true;
+        }
+        if (manaCost <= 0) {
             return false;
         }
-        double threshold = maximumBlood * clamp(finiteOrZero(thresholdFraction), 0d, 1d);
-        return currentBlood >= threshold;
+        return !Float.isFinite(currentMana) || currentMana + MANA_EPSILON < manaCost;
+    }
+
+    public static boolean canAffordBlood(int currentBlood, int bloodCost) {
+        return currentBlood >= 0 && bloodCost >= 0 && currentBlood >= bloodCost;
     }
 
     public static int calculateRestoredBlood(float actualDamage, double multiplier) {

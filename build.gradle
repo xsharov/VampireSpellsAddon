@@ -259,6 +259,28 @@ def verifyJarContents = tasks.register('verifyJarContents') {
             if (zip.getEntry("META-INF/LICENSE_${mod_id}") == null) {
                 throw new GradleException("Packaged license is missing from ${archive.name}")
             }
+
+            ['vampire_spells_addon.core.mixins.json',
+             'vampire_spells_addon.client.mixins.json'].each { mixinConfig ->
+                if (zip.getEntry(mixinConfig) == null) {
+                    throw new GradleException("Packaged mixin config ${mixinConfig} is missing from ${archive.name}")
+                }
+            }
+
+            Set<String> expectedRayLocales = [
+                    'en_us', 'es_es', 'es_mx', 'fr_fr', 'it_it',
+                    'ja_jp', 'ko_kr', 'pl_pl', 'pt_br', 'ru_ru',
+                    'uk_ua', 'vi_vn', 'zh_cn', 'zh_hk', 'zh_tw'
+            ] as Set
+            Set<String> packagedRayLocales = names.findAll { name ->
+                name.startsWith('assets/irons_spellbooks/lang/') && name.endsWith('.json')
+            }.collect { name ->
+                name.substring('assets/irons_spellbooks/lang/'.length(), name.length() - '.json'.length())
+            } as Set
+            if (packagedRayLocales != expectedRayLocales) {
+                throw new GradleException(
+                        "Packaged Ray locales ${packagedRayLocales.sort()} do not match ${expectedRayLocales.sort()} in ${archive.name}")
+            }
         }
     }
 }

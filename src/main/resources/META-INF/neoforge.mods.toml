@@ -2,6 +2,12 @@ modLoader = "javafml"
 loaderVersion = "${loader_version_range}"
 license = "${mod_license}"
 
+[[mixins]]
+config = "vampire_spells_addon.client.mixins.json"
+
+[[mixins]]
+config = "vampire_spells_addon.core.mixins.json"
+
 [[mods]]
 modId = "${mod_id}"
 version = "${mod_version}"

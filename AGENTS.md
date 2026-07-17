@@ -62,21 +62,26 @@ versions and the new range has been tested.
   health damage observed at `LivingDamageEvent.Post`. Restoration accounts for
   absorption, caps lethal overkill to pre-hit health, and never requests more
   than the caster's free blood capacity.
-- Devour's mana multiplier applies only to vampire players. Its normal
-  non-creative, mana-consuming path has an additional scaled affordability
-  check before the cast begins.
-- Eight configured blood spells make a high/low-blood decision:
-  `wither_skull`, `sacrifice`, `raise_dead`, `heartstop`, `blood_step`,
-  `blood_slash`, `blood_needles`, and `acupuncture`.
-  - The decision uses an exact fractional threshold and the final
-    `SpellOnCastEvent` mana cost.
-  - At high blood they atomically spend the full additional blood cost and use
-    the high-blood cooldown multiplier. If the cost cannot be paid, they fall
-    back to the low-blood outcome without a partial debit.
-  - At low blood they skip blood spending and use the low-blood cooldown
-    multiplier.
-  - The current implementation does not remove the normal Iron's Spells mana
-    cost; blood is an additional cost.
+- Vampire players use mana normally for mana-consuming Blood School spells.
+  When current mana cannot cover the full price, all such spells except Ray of
+  Siphoning atomically replace the complete mana debit with blood. The server
+  config can instead make this blood-only replacement unconditional.
+  - Creative players, cast sources that do not consume mana, and upstream
+    recasts are excluded from resource replacement.
+  - The blood price uses the final `SpellOnCastEvent` mana price and the
+    configured mana-to-blood ratio. Devour's vampire-only mana multiplier is
+    applied before either resource is selected.
+  - Insufficient blood cancels before the mana debit and spell effect. No
+    partial blood or mana debit is retained.
+  - Ray of Siphoning always keeps its upstream mana cost and continues to
+    restore blood.
+- Every Blood School spell cast by a vampire, including Ray of Siphoning, uses
+  the configured cooldown multiplier. The default is `2/3`, making cooldowns
+  1.5 times shorter while preserving upstream player and item modifiers.
+- Ray of Siphoning reverses its animated UV flow for vampire player casters on
+  the client without changing its geometry or target-to-caster particles. Its
+  guide text is overridden in all 15 Iron's Spells locales with the additional
+  night-creature lore.
 - Delivered holy health damage reflects onto vampire player casters. Vampirism
   NPC vampires take doubled holy damage independently of who cast the spell.
 - Holy heals damage vampire casters/targets and queue suppression of the
@@ -85,11 +90,11 @@ versions and the new range has been tested.
   `sunbeam`) deal 5 damage to a vampire caster, reset upstream additional cast
   data, and cancel the cast.
 
-Cast/heal correlation state is bounded and transient state is cleared on
-timeout, logout, player clone, and server shutdown. `raise_dead` deliberately
-persists its decision in NeoForge player NBT for the ten-minute recast window
-because Iron's Spells applies its cooldown only when that window ends; dimension
-changes, relogging, and server restarts preserve that active decision.
+Cast outcomes use a bounded thread-local LIFO so nested `SpellOnCastEvent`
+dispatch remains correlated with the matching `AbstractSpell#castSpell` frame.
+Holy-heal correlation remains bounded and is cleared on timeout, logout, player
+clone, and server shutdown. Resource replacement does not persist player data;
+upstream recasts are detected directly and remain free.
 
 The server config is generated as
 `config/vampire_spells_addon-server.toml`. Configuration definitions live in
@@ -97,8 +102,11 @@ The server config is generated as
 
 ## Integration Architecture
 
-The addon compiles only against Minecraft and NeoForge. Parent-mod access is
-runtime-only and reflective so their classes are never bundled into this JAR.
+The addon compiles only against Minecraft, NeoForge, and the Mixin/MixinExtras
+transformation APIs supplied by the NeoForge runtime. Parent-mod access remains
+runtime-only: ordinary integration is reflective and the narrow mixins use
+string targets, so parent classes are never placed on the compile classpath or
+bundled into this JAR.
 
 Verified Iron's Spells reflection targets for the current source snapshot:
 
@@ -109,8 +117,22 @@ Verified Iron's Spells reflection targets for the current source snapshot:
 - `AbstractSpell#getSpellResource`, `getSchoolType`, and `getManaCost`.
 - `SchoolType#getId`.
 - `CastSource#consumesMana`.
-- `MagicData#getPlayerMagicData`, `getMana`, and
-  `resetAdditionalCastData`.
+- `SpellOnCastEvent#getSchoolType` and `getCastSource`.
+- `MagicData#getPlayerMagicData`, `getMana`, `resetAdditionalCastData`, and
+  `getPlayerRecasts`.
+- `PlayerRecasts#hasRecastForSpell(String)`.
+
+Verified Iron's Spells transformation targets for both the compatibility floor
+and current runtime:
+
+- `AbstractSpell#canBeCastedBy`: modify the single
+  `CastSource#consumesMana()` expression so eligible vampire blood fallback can
+  reach `SpellPreCastEvent` without weakening learning, cooldown, adventure, or
+  spell-specific checks.
+- `AbstractSpell#castSpell`: after `SpellOnCastEvent` dispatch and before the
+  mana debit/effect, stop an outcome that could not atomically pay blood.
+- Client `SpellRenderingHelper#renderRayOfSiphoning`: invert the stored
+  `deltaUV` float only for vampire player casters.
 
 Verified Vampirism reflection targets:
 
@@ -136,6 +158,7 @@ spell.checkPreCastConditions
 -> SpellPreCastEvent
 -> channel/cast start
 -> SpellOnCastEvent
+-> addon unpaid-blood abort hook
 -> Iron's Spells mana debit
 -> spell implementation
 -> SpellCooldownAddedEvent.Pre
@@ -154,8 +177,8 @@ SpellHealEvent
 
 ## Reflection and Packaging Guardrails
 
-1. Direct imports are allowed only from this addon, Java, Minecraft, and
-   NeoForge.
+1. Direct imports are allowed only from this addon, Java, Minecraft, NeoForge,
+   and, inside mixin classes, the Mixin/MixinExtras APIs shipped with NeoForge.
 2. Never add parent-mod compile dependencies, copied API classes, or stubs under
    `io.redspace.*` or `de.teamlapen.*`.
 3. Development runtime dependencies are allowed through `localRuntime`; they
@@ -166,6 +189,9 @@ SpellHealEvent
 6. Preserve normal behavior for non-vampires and unrelated spells.
 7. Never copy classes or resources from `dependency-source/` into the addon.
 8. The main JAR may contain only addon classes/resources and NeoForge metadata.
+9. Keep mixin targets string-based, configs required, injections narrowly
+   scoped with `defaultRequire = 1`, and verify both floor/current runtimes after
+   every upstream change.
 
 Keep the existing split between reflection bridges, cast/damage state, blood
 mechanics, holy mechanics, and listener orchestration. No Java source currently
@@ -214,9 +240,10 @@ Gradle input.
 integration checks when Vampirism, Iron's Spells, Iron's Lib, GeckoLib, Player
 Animator, Curios, and Vampirism's runtime dependencies are all resolved.
 
-Deterministic blood-cost, threshold, restoration, mana, and cooldown calculations
-have unit tests. There are no automated gameplay GameTests. A successful
-`runGameTestServer` with zero tests is not gameplay evidence.
+Deterministic blood-cost, resource-selection, restoration, mana, cooldown,
+nested-outcome, and localization checks have unit tests. There are no automated
+gameplay GameTests. A successful `runGameTestServer` with zero tests is not
+gameplay evidence.
 
 ## GitHub Actions and Versioning
 
@@ -286,9 +313,12 @@ Manual gameplay coverage for integration changes:
 
 - vampire and non-vampire player paths;
 - Vampirism NPC and ordinary living targets;
-- high/low/insufficient blood, cast cancellation, channeled casts, and recasts;
+- sufficient/insufficient mana, default fallback, forced blood-only mode,
+  insufficient blood, creative and non-mana sources, cast cancellation, and
+  recasts;
 - Ray and Devour against armor, absorption, lethal/overkill, and invalid targets;
 - each blood-cost spell at multiple levels;
+- Ray UV direction for local and remote vampire/non-vampire players;
 - holy damage, self-heal, targeted heal, area heal, utility, and friendly fire;
 - logout/death/dimension transition while cast state is pending.
 
@@ -297,17 +327,20 @@ Manual gameplay coverage for integration changes:
 - Iron's Spells `3.15.5`/`3.15.6` continuous-cast fixes make the 100-tick Ray of
   Siphoning apply 11 pulses rather than 10. Total blood restoration may need a
   separate balance adjustment after gameplay measurement.
-- Devour's pre-cast estimate cannot observe Iron's internal optional
-  `creativeMana` policy or third-party changes made later in
-  `SpellOnCastEvent`; those paths can still debit a different final amount.
+- The pre-cast affordability estimate cannot observe third-party changes made
+  later in `SpellOnCastEvent`. The final event price is authoritative, so a
+  late increase can switch to blood or stop the cast and a late decrease can
+  keep it on mana.
+- Resource fallback and Ray UV reversal depend on narrow mixin injection points.
+  Recheck the invocation target and Ray float-local ordinal against every Iron's
+  Spells update, then smoke-load both the compatibility floor and current
+  runtime on the appropriate server/client side.
 - Post-damage correlation assumes NeoForge's synchronous paired Pre/Post events.
   Nested damage is tracked, but third-party source replacement and unusual
   re-entrant paths still need runtime coverage.
 - Holy-heal suppression matches target, amount, and server tick. A third-party
   modifier that rewrites or defers the heal makes the token expire instead of
   suppressing an unrelated heal.
-- `raise_dead` cooldown state is bounded to the current hard-coded ten-minute
-  upstream recast lifetime. Recheck that bound if the spell changes.
 - Iron's Lib resolves as the mutable `1.21.1-2.1.0-SNAPSHOT` and currently
   requires NeoForge `21.1.200`; record and retest the resolved artifact and its
   metadata floor for releases.

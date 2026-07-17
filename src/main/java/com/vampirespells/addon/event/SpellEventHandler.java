@@ -24,7 +24,7 @@ public final class SpellEventHandler {
 
     private static final CastStateTracker CAST_STATE = new CastStateTracker();
     private static final DamageStateTracker DAMAGE_STATE = new DamageStateTracker();
-    private static final BloodSpellHandler BLOOD_SPELLS = new BloodSpellHandler(CAST_STATE);
+    private static final BloodSpellHandler BLOOD_SPELLS = new BloodSpellHandler();
     private static final HolySpellHandler HOLY_SPELLS = new HolySpellHandler(CAST_STATE);
 
     private static boolean registrationAttempted;
@@ -164,10 +164,6 @@ public final class SpellEventHandler {
         }
         CAST_STATE.clearTransientPlayer(event.getOriginal());
         CAST_STATE.clearTransientPlayer(event.getEntity());
-        if (event.isWasDeath()) {
-            CAST_STATE.clearPersistentPlayer(event.getOriginal());
-            CAST_STATE.clearPersistentPlayer(event.getEntity());
-        }
     }
 
     private static void onServerTick(ServerTickEvent.Post event) {
@@ -175,7 +171,6 @@ public final class SpellEventHandler {
             return;
         }
         CAST_STATE.purgeExpired(event.getServer().getTickCount());
-        event.getServer().getPlayerList().getPlayers().forEach(CAST_STATE::tickPersistentDecisions);
     }
 
     private static void onServerStopped(ServerStoppedEvent event) {
