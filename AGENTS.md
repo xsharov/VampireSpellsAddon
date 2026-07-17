@@ -27,12 +27,15 @@ facts. It should only direct tools to this file.
 ## Current Baseline
 
 - NeoForge compile baseline: `21.1.200`.
+- NeoForge runtime compatibility floor: `21.1.200`.
 - Runtime compatibility floors:
   - Vampirism `1.10.7`.
   - Iron's Spells 'n Spellbooks `1.21.1-3.14.3`.
 - Current development runtime releases:
   - Vampirism Maven artifact `1.21-1.10.12`.
   - Iron's Spells `1.21.1-3.16.2`.
+  - Iron's Lib `1.21.1-2.1.0-SNAPSHOT`, which currently requires NeoForge
+    `21.1.200` or newer.
 - Upstream source snapshots used for the July 2026 audit:
   - Iron's Spells branch `1.21`, version `3.16.2`, commit `e57a7dcb`.
   - Vampirism branch `version/1.21/latest`, source version `1.10.13`, commit
@@ -46,25 +49,38 @@ versions and the new range has been tested.
 
 ## Implemented Behavior
 
-- Ray of Siphoning keeps its damage and restores vampire blood from the
-  `LivingDamageEvent.Pre` damage value using configurable multiplier and
-  saturation values.
-- Devour restores configurable vampire blood and multiplies its mana cost.
+- Ray of Siphoning and Devour restore configurable vampire blood from delivered
+  health damage observed at `LivingDamageEvent.Post`. Restoration accounts for
+  absorption, caps lethal overkill to pre-hit health, and never requests more
+  than the caster's free blood capacity.
+- Devour's mana multiplier applies only to vampire players. Its normal
+  non-creative, mana-consuming path has an additional scaled affordability
+  check before the cast begins.
 - Eight configured blood spells make a high/low-blood decision:
   `wither_skull`, `sacrifice`, `raise_dead`, `heartstop`, `blood_step`,
   `blood_slash`, `blood_needles`, and `acupuncture`.
-  - At high blood they spend additional blood and use the high-blood cooldown
-    multiplier.
+  - The decision uses an exact fractional threshold and the final
+    `SpellOnCastEvent` mana cost.
+  - At high blood they atomically spend the full additional blood cost and use
+    the high-blood cooldown multiplier. If the cost cannot be paid, they fall
+    back to the low-blood outcome without a partial debit.
   - At low blood they skip blood spending and use the low-blood cooldown
     multiplier.
   - The current implementation does not remove the normal Iron's Spells mana
     cost; blood is an additional cost.
-- Holy damage reflects onto vampire player casters. Vampirism NPC vampires take
-  doubled holy damage in the currently handled path.
+- Delivered holy health damage reflects onto vampire player casters. Vampirism
+  NPC vampires take doubled holy damage independently of who cast the spell.
 - Holy heals damage vampire casters/targets and queue suppression of the
   corresponding `LivingHealEvent` amount.
 - Holy utility spells (`angel_wing`, `fortify`, `wisp`, `haste`, `cleanse`, and
-  `sunbeam`) deal 5 damage to a vampire caster and cancel the cast.
+  `sunbeam`) deal 5 damage to a vampire caster, reset upstream additional cast
+  data, and cancel the cast.
+
+Cast/heal correlation state is bounded and transient state is cleared on
+timeout, logout, player clone, and server shutdown. `raise_dead` deliberately
+persists its decision in NeoForge player NBT for the ten-minute recast window
+because Iron's Spells applies its cooldown only when that window ends; dimension
+changes, relogging, and server restarts preserve that active decision.
 
 The server config is generated as
 `config/vampire_spells_addon-server.toml`. Configuration definitions live in
@@ -83,13 +99,16 @@ Verified Iron's Spells reflection targets for the current source snapshot:
 - `SpellRegistry#getSpell(ResourceLocation)`.
 - `AbstractSpell#getSpellResource`, `getSchoolType`, and `getManaCost`.
 - `SchoolType#getId`.
+- `CastSource#consumesMana`.
+- `MagicData#getPlayerMagicData`, `getMana`, and
+  `resetAdditionalCastData`.
 
 Verified Vampirism reflection targets:
 
 - `VampirismAPI#vampirePlayer(Player)`.
-- `IVampirePlayer#getLevel`, `getBloodLevel`, `getBloodStats`, and `useBlood`.
+- `IVampirePlayer#getLevel`, `getBloodLevel`, and `getBloodStats`.
 - `IBloodStats#getMaxBlood`.
-- Both observed `IVampire#drinkBlood` overloads.
+- `IVampire#useBlood` and the four-argument `IVampire#drinkBlood` overload.
 - `IDrinkBloodContext` entity/stack/block-state/block-position accessors.
 - `de.teamlapen.vampirism.api.entity.vampire.IVampire` as the NPC marker.
 
@@ -97,13 +116,15 @@ Verified NeoForge contracts:
 
 - Four-argument event-bus `addListener(EventPriority, boolean, Class,
   Consumer)` for reflective parent events.
-- `LivingDamageEvent.Pre#getNewDamage`.
-- `LivingHealEvent#getAmount/setAmount`.
+- `LivingDamageEvent.Pre` and `LivingDamageEvent.Post#getNewDamage`.
+- `LivingHealEvent#getAmount/setAmount` and cancellation.
+- Player logout/clone and server tick/stop lifecycle events.
 
 Expected event order matters:
 
 ```text
-SpellPreCastEvent
+spell.checkPreCastConditions
+-> SpellPreCastEvent
 -> channel/cast start
 -> SpellOnCastEvent
 -> Iron's Spells mana debit
@@ -137,10 +158,9 @@ SpellHealEvent
 7. Never copy classes or resources from `dependency-source/` into the addon.
 8. The main JAR may contain only addon classes/resources and NeoForge metadata.
 
-`SpellEventHandler.java` currently exceeds the 600-line project limit. Before
-adding another mechanic, split reflection access, cast state, blood mechanics,
-and holy mechanics into focused classes without changing the reflection-only
-boundary.
+Keep the existing split between reflection bridges, cast/damage state, blood
+mechanics, holy mechanics, and listener orchestration. No Java source currently
+exceeds the 600-line project limit.
 
 ## Upstream Update Workflow
 
@@ -166,6 +186,7 @@ Use the committed Gradle wrapper and Java 21. Never commit a machine-specific
 `org.gradle.java.home` value.
 
 ```bash
+./gradlew test
 ./gradlew compileJava processResources
 ./gradlew --no-daemon clean build
 ./gradlew resolveParentRuntime
@@ -184,14 +205,18 @@ Gradle input.
 integration checks when Vampirism, Iron's Spells, Iron's Lib, GeckoLib, Player
 Animator, Curios, and Vampirism's runtime dependencies are all resolved.
 
-There are currently no automated unit tests or GameTests. A successful
+Deterministic blood-cost, threshold, restoration, mana, and cooldown calculations
+have unit tests. There are no automated gameplay GameTests. A successful
 `runGameTestServer` with zero tests is not gameplay evidence.
 
 ## GitHub Actions and Versioning
 
 `.github/workflows/build.yml` runs on pushes, pull requests, and manual
-dispatches with Java 21 and the committed wrapper. It builds, runs the Gradle
-verification tasks, and uploads only the main JAR.
+dispatches with Java 21 and the committed wrapper. It builds, resolves the
+parent runtime, runs the Gradle verification tasks, smoke-loads the current and
+compatibility-floor parent versions, and uploads only the main JAR.
+`runGameTestServer` is finalized by a log-marker check because NeoGradle can
+otherwise report success after an early mod-loading failure.
 
 `mod_version` in `gradle.properties` is the version baseline. CI adds
 `github.run_number` to its numeric patch component and passes the result through
@@ -205,13 +230,18 @@ intentional version-line reset or release policy change.
 Quick feedback:
 
 ```bash
+./gradlew test
 ./gradlew compileJava processResources
 ```
 
 Required before committing build or code changes:
 
 ```bash
-./gradlew --no-daemon clean build
+./gradlew --no-daemon clean build resolveParentRuntime
+./gradlew runGameTestServer
+./gradlew runGameTestServer \
+  -Pvampirism_runtime_version=1.21-1.10.7 \
+  -Pirons_spells_runtime_version=1.21.1-3.14.3
 jar --list --file build/libs/vampire_spells_addon-neoforge-*.jar
 ```
 
@@ -238,21 +268,29 @@ Manual gameplay coverage for integration changes:
 
 ## Known Risks Requiring Runtime Validation
 
-- Ray and Devour restore blood from `LivingDamageEvent.Pre`, before absorption,
-  overkill, and final health loss are known. Iron's Spells lifesteal uses the
-  post-damage stage.
-- Devour's mana multiplier currently applies to non-vampires and is changed only
-  after the original affordability check.
-- Holy damage reflection uses the early `SpellDamageEvent` amount. Later
-  resistance, friendly-fire, or cancellation can make reflected and delivered
-  damage diverge.
-- Holy-heal suppression stores `UUID -> pending amount`; an altered or missing
-  heal event can leave residue that suppresses a later unrelated heal.
-- Blood cast decisions can become stale between pre-cast, cast, cooldown, and
-  logout/cancellation. The current maps have no explicit lifecycle cleanup.
-- The high-blood threshold uses integer rounding rather than an exact fractional
-  comparison.
-- `HOLY_HEAL_SPELLS` is currently declared but unused.
+- Iron's Spells `3.15.5`/`3.15.6` continuous-cast fixes make the 100-tick Ray of
+  Siphoning apply 11 pulses rather than 10. Total blood restoration may need a
+  separate balance adjustment after gameplay measurement.
+- Devour's pre-cast estimate cannot observe Iron's internal optional
+  `creativeMana` policy or third-party changes made later in
+  `SpellOnCastEvent`; those paths can still debit a different final amount.
+- Post-damage correlation assumes NeoForge's synchronous paired Pre/Post events.
+  Nested damage is tracked, but third-party source replacement and unusual
+  re-entrant paths still need runtime coverage.
+- Holy-heal suppression matches target, amount, and server tick. A third-party
+  modifier that rewrites or defers the heal makes the token expire instead of
+  suppressing an unrelated heal.
+- `raise_dead` cooldown state is bounded to the current hard-coded ten-minute
+  upstream recast lifetime. Recheck that bound if the spell changes.
+- Iron's Lib resolves as the mutable `1.21.1-2.1.0-SNAPSHOT` and currently
+  requires NeoForge `21.1.200`; record and retest the resolved artifact and its
+  metadata floor for releases.
+- Vampirism's POM references a legacy JEI artifact id. The runtime excludes it
+  and explicitly selects `jei-1.21.1-neoforge`; never let both JEI artifact ids
+  enter a development launch.
+- The audited Vampirism `1.10.13` source was newer than the published `1.21`
+  Maven artifact. Recheck availability and exact release sources before raising
+  the development runtime.
 
 Do not silently change these mechanics during unrelated maintenance. Reproduce
 the behavior, define the intended rule, add focused validation, and then change
