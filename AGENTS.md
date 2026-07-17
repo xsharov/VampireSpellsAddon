@@ -24,14 +24,32 @@
 Do not use the legacy `CLAUDE.md` text as an independent source of project
 facts. It should only direct tools to this file.
 
-## Git Permissions
+## Git Workflow
 
-- Codex may create and switch branches in this repository without requesting
-  additional user permission.
-- Codex may stage changes and create commits in this repository without
-  requesting additional user permission.
-- Keep commits focused and use commit messages that briefly summarize the
-  completed work and any relevant verification notes.
+- Never edit or commit directly on `master`. Before changing repository files,
+  fetch the latest `origin/master`, then create and switch to a task-specific
+  branch from that remote-tracking ref. Do not update or modify local `master`
+  as part of task work.
+- Codex may fetch, create and switch branches, stage, commit, and push without
+  requesting additional user permission when completing repository work.
+- Stage only files that belong to the current task. Preserve unrelated local
+  changes and keep every commit focused.
+- Commit messages must briefly summarize the completed work. The commit body
+  must include relevant implementation and verification notes when they add
+  useful context.
+- After completing and verifying a change, push the task branch and use the
+  authenticated GitHub CLI (`gh`) to create a pull request targeting `master`.
+  Do not leave completed work only in local commits.
+- Every pull request must have a detailed Markdown description covering:
+  - what changed;
+  - why the change was needed;
+  - user, developer, or runtime impact;
+  - the verification performed and its result;
+  - known limitations, risks, or follow-up work, when applicable.
+- Use `gh` for GitHub operations, including repository inspection, pull request
+  creation, and pull request updates. If push or pull request creation is
+  blocked, stop and report the exact blocker instead of committing to
+  `master` or claiming that publication succeeded.
 
 ## Current Baseline
 
