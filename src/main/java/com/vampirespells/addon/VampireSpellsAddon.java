@@ -1,6 +1,7 @@
 package com.vampirespells.addon;
 
 import com.vampirespells.addon.config.AddonConfig;
+import com.vampirespells.addon.event.SpellEventHandler;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
@@ -23,21 +24,11 @@ public class VampireSpellsAddon {
     }
 
     private void commonSetup(final FMLCommonSetupEvent event) {
-        LOGGER.info("Vampire Spells Addon common setup complete!");
-
         event.enqueueWork(() -> {
-            try {
-                Class.forName("de.teamlapen.vampirism.api.VampirismAPI");
-                LOGGER.info("Vampirism API detected successfully");
-            } catch (ClassNotFoundException e) {
-                LOGGER.error("Vampirism API not found! This addon requires Vampirism to be installed.");
-            }
-
-            try {
-                Class.forName("io.redspace.ironsspellbooks.api.registry.SpellRegistry");
-                LOGGER.info("Iron's Spells API detected successfully");
-            } catch (ClassNotFoundException e) {
-                LOGGER.error("Iron's Spells API not found! This addon requires Iron's Spells 'n Spellbooks to be installed.");
+            if (SpellEventHandler.register()) {
+                LOGGER.info("Vampirism and Iron's Spells integration contracts validated successfully");
+            } else {
+                LOGGER.error("Required parent-mod contracts are unavailable; addon mechanics are disabled");
             }
         });
     }

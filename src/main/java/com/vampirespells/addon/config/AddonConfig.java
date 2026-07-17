@@ -55,7 +55,7 @@ public final class AddonConfig {
                 .defineInRange("lowBloodCooldownMultiplier", 2d, 0d, 10d);
 
         DEVOUR_MANA_MULTIPLIER = builder
-                .comment("Mana cost multiplier applied to the Devour spell.")
+                .comment("Mana cost multiplier applied to Devour for vampire players.")
                 .defineInRange("devourManaMultiplier", 2d, 0d, 10d);
         DEVOUR_BLOOD_RESTORE_MULTIPLIER = builder
                 .comment("Blood restoration multiplier applied to the Devour spell (relative to damage dealt).")
