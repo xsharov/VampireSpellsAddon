@@ -220,19 +220,36 @@ have unit tests. There are no automated gameplay GameTests. A successful
 
 ## GitHub Actions and Versioning
 
-`.github/workflows/build.yml` runs on pushes, pull requests, and manual
-dispatches with Java 21 and the committed wrapper. It builds, resolves the
-parent runtime, runs the Gradle verification tasks, smoke-loads the current and
-compatibility-floor parent versions, and uploads only the main JAR.
+`.github/workflows/build.yml` listens for closed `pull_request_target` events
+whose base branch is `master`, but its release job runs only when the pull
+request was actually merged. Direct pushes, manual events, and pull requests
+closed without merging do not build or publish anything. The workflow checks
+the exact merge commit's `gradle.properties` through the GitHub API and reserves
+the release version as a draft before building. A separate read-only job checks
+out that commit without persisting Git credentials, then uses Java 21 and the
+committed wrapper to build, resolve the parent runtime, run the Gradle
+verification tasks, and smoke-load the current and compatibility-floor parent
+versions. It passes only the exact main JAR through a 30-day, unarchived
+internal artifact to the publish job. Repository code never runs in either
+write-enabled job.
 `runGameTestServer` is finalized by a log-marker check because NeoGradle can
 otherwise report success after an early mod-loading failure.
 
-`mod_version` in `gradle.properties` is the version baseline. CI adds
-`github.run_number` to its numeric patch component and passes the result through
+`mod_version` in `gradle.properties` is the version baseline. CI scans numeric
+release tags with the same version prefix and selects the next patch above both
+the baseline and existing tags. A rerun for the same merge commit reuses its
+existing tag or draft version. The selected version is passed through
 `-Pmod_version`; the generated `neoforge.mods.toml`, manifest, JAR filename, and
-artifact name therefore share one automatically increasing version. Do not add
-routine version-bump commits for CI builds. Change the baseline only for an
-intentional version-line reset or release policy change.
+release tag therefore agree. The publish job uploads and verifies the main JAR
+by its SHA-256 digest, then publishes the reserved release. Release workflows
+queue instead of canceling one another. A later descendant merge may replace a
+workflow-created unfinished draft and reuse its reserved version, which lets a
+fixing merge recover from a deterministic build failure. Manual drafts and
+drafts on unrelated commits remain fail-closed and require explicit cleanup.
+If GitHub delivers an older merge event after a newer tagged merge, the stale
+event exits successfully instead of publishing older code as the latest
+release. Do not add routine version-bump commits for CI builds. Change the
+baseline only for an intentional version-line reset or release policy change.
 
 ## Verification Pipeline
 
@@ -312,7 +329,8 @@ it in a separate commit.
 3. Run JAR hygiene verification and inspect the expanded mod metadata.
 4. Complete client and dedicated-server smoke tests with the runtime mod set.
 5. Complete the manual gameplay matrix relevant to the release.
-6. Tag/release the exact commit and attach the main JAR produced by CI.
+6. Merge the intended pull request into `master`, then confirm that the release
+   workflow tagged the exact merge commit and attached the main JAR.
 
 <!-- LOCAL_MEMPALACE_MODULE_START -->
 ## MemPalace Local Memory

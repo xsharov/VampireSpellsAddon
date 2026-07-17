@@ -1,26 +1,300 @@
-name: Build
+name: Release
 
 on:
-  push:
-  pull_request:
-  workflow_dispatch:
+  pull_request_target:
+    branches:
+      - master
+    types:
+      - closed
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
-  group: build-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: vampire-spells-addon-release-master
+  queue: max
 
 jobs:
+  reserve:
+    if: github.event.pull_request.merged == true
+    name: Reserve release version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      should_release: ${{ steps.version.outputs.should_release }}
+
+    steps:
+      - name: Reserve release version
+        id: version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          if ! properties="$(
+            gh api \
+              -H "Accept: application/vnd.github.raw+json" \
+              "repos/${GITHUB_REPOSITORY}/contents/gradle.properties?ref=${MERGE_SHA}"
+          )"; then
+            exit 1
+          fi
+
+          base_version="$(printf '%s\n' "$properties" | sed -n 's/^mod_version=//p' | tr -d '\r')"
+          version_prefix="${base_version%.*}"
+          base_patch="${base_version##*.}"
+
+          if [[ ! "$version_prefix" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ || ! "$base_patch" =~ ^[0-9]+$ ]]; then
+            echo "mod_version must use a safe prefix and end in a numeric patch: $base_version" >&2
+            exit 1
+          fi
+
+          highest_patch=$((10#$base_patch))
+          release_marker='<!-- vampire-spells-addon-release-workflow -->'
+          existing_version=""
+          stale_draft_tag=""
+          stale_draft_target=""
+          stale_draft_author=""
+          stale_draft_managed=""
+          latest_tag_name=""
+          latest_tag_sha=""
+          latest_tag_patch=-1
+          declare -A tag_shas=()
+
+          if ! tag_rows="$(
+            gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${version_prefix}." \
+              --jq '.[] | [.ref, .object.type, .object.sha] | @tsv'
+          )"; then
+            exit 1
+          fi
+
+          while IFS=$'\t' read -r tag_ref object_type object_sha; do
+            [[ -n "$tag_ref" ]] || continue
+
+            tag_name="${tag_ref#refs/tags/}"
+            tag_patch="${tag_name#${version_prefix}.}"
+            [[ "$tag_name" == "${version_prefix}."* && "$tag_patch" =~ ^[0-9]+$ ]] || continue
+
+            numeric_patch=$((10#$tag_patch))
+            if (( numeric_patch > highest_patch )); then
+              highest_patch=$numeric_patch
+            fi
+
+            while [[ "$object_type" == "tag" ]]; do
+              if ! tag_object="$(
+                gh api "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}" \
+                  --jq '[.object.type, .object.sha] | @tsv'
+              )"; then
+                exit 1
+              fi
+              IFS=$'\t' read -r object_type object_sha <<< "$tag_object"
+            done
+
+            if [[ "$object_type" != "commit" ]]; then
+              echo "Release tag $tag_name points to unsupported object type $object_type" >&2
+              exit 1
+            fi
+
+            tag_shas["$tag_name"]="$object_sha"
+            if (( numeric_patch > latest_tag_patch )); then
+              latest_tag_patch=$numeric_patch
+              latest_tag_name="$tag_name"
+              latest_tag_sha="$object_sha"
+            fi
+            if [[ "$object_sha" == "$MERGE_SHA" ]]; then
+              if [[ -n "$existing_version" && "$existing_version" != "$tag_name" ]]; then
+                echo "Merge commit $MERGE_SHA has multiple release versions" >&2
+                exit 1
+              fi
+              existing_version="$tag_name"
+            fi
+          done <<< "$tag_rows"
+
+          if [[ -n "$latest_tag_sha" && "$latest_tag_sha" != "$MERGE_SHA" ]]; then
+            if ! comparison_status="$(
+              gh api \
+                "repos/${GITHUB_REPOSITORY}/compare/${MERGE_SHA}...${latest_tag_sha}" \
+                --jq '.status'
+            )"; then
+              exit 1
+            fi
+            case "$comparison_status" in
+              ahead)
+                echo "version=$latest_tag_name" >> "$GITHUB_OUTPUT"
+                echo "should_release=false" >> "$GITHUB_OUTPUT"
+                echo "Skipping stale merge $MERGE_SHA because $latest_tag_name already contains it"
+                exit 0
+                ;;
+              behind)
+                ;;
+              *)
+                echo "Latest release tag $latest_tag_name is not an ancestor of merge $MERGE_SHA" >&2
+                exit 1
+                ;;
+            esac
+          fi
+
+          if ! draft_rows="$(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              --jq '.[] | select(.draft == true) | [.tag_name, .target_commitish, .author.login, ((.body // "") | contains("<!-- vampire-spells-addon-release-workflow -->"))] | @tsv'
+          )"; then
+            exit 1
+          fi
+
+          while IFS=$'\t' read -r draft_tag draft_target draft_author draft_managed; do
+            [[ -n "$draft_tag" ]] || continue
+            draft_patch="${draft_tag#${version_prefix}.}"
+            [[ "$draft_tag" == "${version_prefix}."* && "$draft_patch" =~ ^[0-9]+$ ]] || continue
+
+            numeric_patch=$((10#$draft_patch))
+            if (( numeric_patch > highest_patch )); then
+              highest_patch=$numeric_patch
+            fi
+
+            if [[ "$draft_target" == "$MERGE_SHA" ]]; then
+              if [[ "$draft_author" != "github-actions[bot]" || "$draft_managed" != "true" ]]; then
+                echo "Draft release $draft_tag was not created by this workflow" >&2
+                exit 1
+              fi
+              if [[ -n "$existing_version" && "$existing_version" != "$draft_tag" ]]; then
+                echo "Merge commit $MERGE_SHA has multiple release versions" >&2
+                exit 1
+              fi
+              existing_version="$draft_tag"
+            else
+              if [[ -n "$stale_draft_tag" && "$stale_draft_tag" != "$draft_tag" ]]; then
+                echo "Multiple unfinished draft releases block automatic recovery" >&2
+                exit 1
+              fi
+              stale_draft_tag="$draft_tag"
+              stale_draft_target="$draft_target"
+              stale_draft_author="$draft_author"
+              stale_draft_managed="$draft_managed"
+            fi
+          done <<< "$draft_rows"
+
+          if [[ -n "$stale_draft_tag" ]]; then
+            if [[ -n "$existing_version" ]]; then
+              echo "Release state contains drafts for both the current and an older merge" >&2
+              exit 1
+            fi
+            if [[ "$stale_draft_author" != "github-actions[bot]" || "$stale_draft_managed" != "true" ]]; then
+              echo "Draft release $stale_draft_tag was not created by this workflow" >&2
+              exit 1
+            fi
+            if [[ ! "$stale_draft_target" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Draft release $stale_draft_tag has an unsafe target: $stale_draft_target" >&2
+              exit 1
+            fi
+
+            if ! comparison_status="$(
+              gh api \
+                "repos/${GITHUB_REPOSITORY}/compare/${stale_draft_target}...${MERGE_SHA}" \
+                --jq '.status'
+            )"; then
+              exit 1
+            fi
+            if [[ "$comparison_status" != "ahead" ]]; then
+              echo "Merge commit $MERGE_SHA is not a descendant of draft target $stale_draft_target" >&2
+              exit 1
+            fi
+
+            stale_tag_sha="${tag_shas[$stale_draft_tag]:-}"
+            if [[ -n "$stale_tag_sha" && "$stale_tag_sha" != "$stale_draft_target" ]]; then
+              echo "Draft tag $stale_draft_tag points to $stale_tag_sha instead of $stale_draft_target" >&2
+              exit 1
+            fi
+
+            if [[ -n "$stale_tag_sha" ]]; then
+              gh release delete "$stale_draft_tag" --cleanup-tag --yes
+            else
+              gh release delete "$stale_draft_tag" --yes
+            fi
+            unset 'tag_shas[$stale_draft_tag]'
+            existing_version="$stale_draft_tag"
+            echo "Reusing $stale_draft_tag for descendant merge $MERGE_SHA"
+          fi
+
+          if [[ -n "$existing_version" ]]; then
+            build_version="$existing_version"
+          else
+            build_version="${version_prefix}.$((highest_patch + 1))"
+          fi
+
+          selected_tag_sha="${tag_shas[$build_version]:-}"
+          if [[ -n "$selected_tag_sha" && "$selected_tag_sha" != "$MERGE_SHA" ]]; then
+            echo "Release tag $build_version points to $selected_tag_sha instead of $MERGE_SHA" >&2
+            exit 1
+          fi
+
+          read_release() {
+            local rows tag_name is_draft target found=""
+            if ! rows="$(
+              gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+                --jq '.[] | [.tag_name, .draft, .target_commitish] | @tsv'
+            )"; then
+              return 1
+            fi
+            while IFS=$'\t' read -r tag_name is_draft target; do
+              [[ "$tag_name" == "$build_version" ]] || continue
+              if [[ -n "$found" ]]; then
+                echo "GitHub returned duplicate releases for tag $build_version" >&2
+                return 1
+              fi
+              found="${is_draft}"$'\t'"${target}"
+            done <<< "$rows"
+            printf '%s' "$found"
+          }
+
+          release_info="$(read_release)"
+          if [[ -z "$release_info" ]]; then
+            gh release create "$build_version" \
+              --draft \
+              --target "$MERGE_SHA" \
+              --title "Vampire Spells Addon $build_version" \
+              --notes "${release_marker}"$'\n\n'"Built automatically after merging pull request #$PR_NUMBER into master." \
+              --generate-notes
+            release_info="$(read_release)"
+            if [[ -z "$release_info" ]]; then
+              echo "Draft release $build_version was not created" >&2
+              exit 1
+            fi
+          fi
+
+          IFS=$'\t' read -r release_is_draft release_target <<< "$release_info"
+          if [[ "$release_is_draft" == "true" && "$release_target" != "$MERGE_SHA" ]]; then
+            echo "Draft release $build_version targets $release_target instead of $MERGE_SHA" >&2
+            exit 1
+          fi
+          if [[ "$release_is_draft" != "true" && "$selected_tag_sha" != "$MERGE_SHA" ]]; then
+            echo "Published release $build_version is not tagged at $MERGE_SHA" >&2
+            exit 1
+          fi
+
+          echo "version=$build_version" >> "$GITHUB_OUTPUT"
+          echo "should_release=true" >> "$GITHUB_OUTPUT"
+          echo "Reserved release version $build_version"
+
   build:
-    name: Build JAR
+    name: Build release JAR
+    needs: reserve
+    if: needs.reserve.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
 
     steps:
       - name: Check out sources
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          persist-credentials: false
 
       - name: Set up Java 21
         uses: actions/setup-java@v5
@@ -31,44 +305,206 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
-      - name: Compute build version
-        id: version
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          base_version="$(sed -n 's/^mod_version=//p' gradle.properties | tr -d '\r')"
-          version_prefix="${base_version%.*}"
-          base_patch="${base_version##*.}"
-
-          if [[ -z "$base_version" || ! "$base_patch" =~ ^[0-9]+$ ]]; then
-            echo "mod_version must end in a numeric patch component: $base_version" >&2
-            exit 1
-          fi
-
-          build_version="${version_prefix}.$((base_patch + GITHUB_RUN_NUMBER))"
-          echo "version=$build_version" >> "$GITHUB_OUTPUT"
-          echo "Building version $build_version"
-
       - name: Build and verify
-        run: ./gradlew --no-daemon clean build resolveParentRuntime --stacktrace -Pmod_version="${{ steps.version.outputs.version }}"
+        run: ./gradlew --no-daemon clean build resolveParentRuntime --stacktrace -Pmod_version="${{ needs.reserve.outputs.version }}"
 
       - name: Smoke-test current parent runtime
-        run: ./gradlew --no-daemon runGameTestServer --stacktrace -Pmod_version="${{ steps.version.outputs.version }}"
+        run: ./gradlew --no-daemon runGameTestServer --stacktrace -Pmod_version="${{ needs.reserve.outputs.version }}"
 
       - name: Smoke-test parent compatibility floors
         run: >-
           ./gradlew --no-daemon runGameTestServer --stacktrace
-          -Pmod_version="${{ steps.version.outputs.version }}"
+          -Pmod_version="${{ needs.reserve.outputs.version }}"
           -Pvampirism_runtime_version=1.21-1.10.7
           -Pirons_spells_runtime_version=1.21.1-3.14.3
 
-      - name: Upload main JAR
-        uses: actions/upload-artifact@v6
+      - name: Store release JAR for publishing
+        uses: actions/upload-artifact@v7
         with:
-          name: vampire-spells-addon-${{ steps.version.outputs.version }}
-          path: |
-            build/libs/vampire_spells_addon-neoforge-*.jar
-            !build/libs/*-sources.jar
+          name: vampire_spells_addon-neoforge-${{ needs.reserve.outputs.version }}.jar
+          path: build/libs/vampire_spells_addon-neoforge-${{ needs.reserve.outputs.version }}.jar
           if-no-files-found: error
           retention-days: 30
+          overwrite: true
+          archive: false
+
+  publish:
+    name: Publish GitHub Release
+    needs:
+      - reserve
+      - build
+    if: needs.reserve.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download verified release JAR
+        uses: actions/download-artifact@v8
+        with:
+          name: vampire_spells_addon-neoforge-${{ needs.reserve.outputs.version }}.jar
+          path: release
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BUILD_VERSION: ${{ needs.reserve.outputs.version }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          release_tag="$BUILD_VERSION"
+          release_marker='<!-- vampire-spells-addon-release-workflow -->'
+          main_jar="release/vampire_spells_addon-neoforge-${BUILD_VERSION}.jar"
+          asset_name="$(basename "$main_jar")"
+
+          if [[ ! -f "$main_jar" ]]; then
+            echo "Expected main JAR was not produced: $main_jar" >&2
+            exit 1
+          fi
+          expected_digest="sha256:$(sha256sum "$main_jar" | cut -d ' ' -f 1)"
+
+          resolve_tag_sha() {
+            local requested_tag="$1"
+            local rows tag_ref object_type object_sha resolved_sha=""
+
+            if ! rows="$(
+              gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/${requested_tag}" \
+                --jq '.[] | [.ref, .object.type, .object.sha] | @tsv'
+            )"; then
+              return 1
+            fi
+            while IFS=$'\t' read -r tag_ref object_type object_sha; do
+              [[ "$tag_ref" == "refs/tags/${requested_tag}" ]] || continue
+
+              while [[ "$object_type" == "tag" ]]; do
+                local tag_object
+                if ! tag_object="$(
+                  gh api "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}" \
+                    --jq '[.object.type, .object.sha] | @tsv'
+                )"; then
+                  return 1
+                fi
+                IFS=$'\t' read -r object_type object_sha <<< "$tag_object"
+              done
+
+              if [[ "$object_type" != "commit" ]]; then
+                echo "Release tag $requested_tag points to unsupported object type $object_type" >&2
+                return 1
+              fi
+              if [[ -n "$resolved_sha" ]]; then
+                echo "GitHub returned duplicate refs for release tag $requested_tag" >&2
+                return 1
+              fi
+              resolved_sha="$object_sha"
+            done <<< "$rows"
+
+            printf '%s' "$resolved_sha"
+          }
+
+          read_asset() {
+            local rows tag_name name state digest found=""
+            if ! rows="$(
+              gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+                --jq '.[] | .tag_name as $tag | .assets[] | [$tag, .name, .state, (.digest // "")] | @tsv'
+            )"; then
+              return 1
+            fi
+            while IFS=$'\t' read -r tag_name name state digest; do
+              [[ "$tag_name" == "$release_tag" && "$name" == "$asset_name" ]] || continue
+              if [[ -n "$found" ]]; then
+                echo "Release $release_tag contains duplicate assets named $asset_name" >&2
+                return 1
+              fi
+              found="${state}"$'\t'"${digest}"
+            done <<< "$rows"
+            printf '%s' "$found"
+          }
+
+          read_release() {
+            local rows tag_name is_draft target found=""
+            if ! rows="$(
+              gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+                --jq '.[] | [.tag_name, .draft, .target_commitish] | @tsv'
+            )"; then
+              return 1
+            fi
+            while IFS=$'\t' read -r tag_name is_draft target; do
+              [[ "$tag_name" == "$release_tag" ]] || continue
+              if [[ -n "$found" ]]; then
+                echo "GitHub returned duplicate releases for tag $release_tag" >&2
+                return 1
+              fi
+              found="${is_draft}"$'\t'"${target}"
+            done <<< "$rows"
+            printf '%s' "$found"
+          }
+
+          tag_sha="$(resolve_tag_sha "$release_tag")"
+          if [[ -n "$tag_sha" && "$tag_sha" != "$MERGE_SHA" ]]; then
+            echo "Release tag $release_tag points to $tag_sha instead of $MERGE_SHA" >&2
+            exit 1
+          fi
+
+          release_info="$(read_release)"
+          if [[ -z "$release_info" ]]; then
+            gh release create "$release_tag" \
+              --draft \
+              --target "$MERGE_SHA" \
+              --title "Vampire Spells Addon $BUILD_VERSION" \
+              --notes "${release_marker}"$'\n\n'"Built automatically after merging pull request #$PR_NUMBER into master." \
+              --generate-notes
+            release_info="$(read_release)"
+            if [[ -z "$release_info" ]]; then
+              echo "Draft release $release_tag was not created" >&2
+              exit 1
+            fi
+          fi
+
+          IFS=$'\t' read -r release_is_draft release_target <<< "$release_info"
+          if [[ -z "$tag_sha" && "$release_is_draft" != "true" ]]; then
+            echo "Published release $release_tag exists without its Git tag" >&2
+            exit 1
+          fi
+          if [[ -z "$tag_sha" && "$release_target" != "$MERGE_SHA" ]]; then
+            echo "Draft release $release_tag targets $release_target instead of $MERGE_SHA" >&2
+            exit 1
+          fi
+
+          asset_info="$(read_asset)"
+          IFS=$'\t' read -r asset_state asset_digest <<< "$asset_info"
+          if [[ -n "$asset_state" && ( "$asset_state" != "uploaded" || "$asset_digest" != "$expected_digest" ) ]]; then
+            if [[ "$release_is_draft" != "true" ]]; then
+              echo "Published release $release_tag contains an invalid $asset_name" >&2
+              exit 1
+            fi
+            gh release delete-asset "$release_tag" "$asset_name" --yes
+            asset_state=""
+          fi
+
+          if [[ -z "$asset_state" ]]; then
+            gh release upload "$release_tag" "$main_jar"
+          else
+            echo "Release $release_tag already contains the verified $asset_name"
+          fi
+
+          asset_info="$(read_asset)"
+          IFS=$'\t' read -r asset_state asset_digest <<< "$asset_info"
+          if [[ "$asset_state" != "uploaded" || "$asset_digest" != "$expected_digest" ]]; then
+            echo "Release asset verification failed for $asset_name" >&2
+            exit 1
+          fi
+
+          if [[ "$release_is_draft" == "true" ]]; then
+            gh release edit "$release_tag" --draft=false --latest
+          fi
+
+          tag_sha="$(resolve_tag_sha "$release_tag")"
+          if [[ "$tag_sha" != "$MERGE_SHA" ]]; then
+            echo "Published tag $release_tag points to $tag_sha instead of $MERGE_SHA" >&2
+            exit 1
+          fi

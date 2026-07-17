@@ -83,10 +83,20 @@ dedicated-server gameplay testing is still required for a release.
 
 ## Continuous integration and versions
 
-GitHub Actions builds the mod after every push and pull request with Java 21.
-CI derives an increasing version from the `mod_version` baseline in
-`gradle.properties` plus the workflow run number, so ordinary builds do not
-need version-bump commits. The main JAR is available as a workflow artifact.
+GitHub Actions builds and publishes the mod only after a pull request targeting
+`master` is merged. Direct pushes, manual runs, and pull requests closed without
+merging do not build or publish a release.
+
+The release workflow takes the next numeric patch after the `mod_version`
+baseline and existing release tags in the same version line, then reserves it
+as a draft targeting the exact merge commit. A rerun for the same merge reuses
+that version. If its build fails, a later descendant merge safely takes over
+the workflow-created draft and reuses the reserved version; manual or unrelated
+drafts are never replaced automatically. After the full build and both
+parent-version smoke tests pass, CI uploads the verified main JAR and publishes
+the release. GitHub's automatically
+generated source ZIP and TAR archives are not installable mod files; use the
+attached `vampire_spells_addon-neoforge-*.jar`.
 
 ## Reference sources
 
