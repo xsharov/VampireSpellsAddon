@@ -24,6 +24,15 @@
 Do not use the legacy `CLAUDE.md` text as an independent source of project
 facts. It should only direct tools to this file.
 
+## Git Permissions
+
+- Codex may create and switch branches in this repository without requesting
+  additional user permission.
+- Codex may stage changes and create commits in this repository without
+  requesting additional user permission.
+- Keep commits focused and use commit messages that briefly summarize the
+  completed work and any relevant verification notes.
+
 ## Current Baseline
 
 - NeoForge compile baseline: `21.1.200`.
