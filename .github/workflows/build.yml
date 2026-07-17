@@ -37,7 +37,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          base_version="$(sed -n 's/^mod_version=//p' gradle.properties)"
+          base_version="$(sed -n 's/^mod_version=//p' gradle.properties | tr -d '\r')"
           version_prefix="${base_version%.*}"
           base_patch="${base_version##*.}"
 
