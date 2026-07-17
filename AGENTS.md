@@ -1,88 +1,325 @@
 # AGENTS.md
 
-## Project Snapshot
-- **Name**: Vampire Spells Addon
-- **Package**: `com.vampirespells.addon`
-- **Version**: 1.21.1-0.0.6
-- **Status**: ✅ Production ready
-- **Integration**: Reflection-only bridge between Iron's Spells 'n Spellbooks (1.21.1-3.14.3) and Vampirism (1.10.7)
+## Maintenance Scope
 
-- **Ray of Siphoning** keeps its damage and restores blood using the configurable `rayBloodRestoreMultiplier` and `rayBloodSaturation` values.
-- **Devour** restores blood scaled by `devourBloodRestoreMultiplier`, applies `devourBloodSaturation`, and multiplies its mana cost by `devourManaMultiplier`.
-- **Blood Spell Threshold**: `wither_skull`, `sacrifice`, `raise_dead`, `heartstop`, `blood_step`, `blood_slash`, `blood_needles`, and `acupuncture` now:
-  - Spend blood (derived from the mana cost curve) and apply the `highBloodCooldownMultiplier` when the vampire has at least `highBloodThresholdFraction` of their maximum blood.
-  - Skip the blood drain and apply the `lowBloodCooldownMultiplier` when below the threshold, relying on mana only.
-- **Holy School Backlash**:
-  - Holy damage spells reflect their damage back onto vampire casters and deal double damage to Vampirism NPC vampires.
-  - Holy heals translate into damage for vampire recipients and vampire casters; heals on vampires are fully suppressed via `LivingHealEvent`.
-  - Holy utility/buff spells (`angel_wing`, `fortify`, `wisp`, `haste`, `cleanse`, `sunbeam`) simply inflict 5 damage on vampire casters and the cast is cancelled.
-- Blood cost per spell level is computed from the mana floor/ceiling span using `bloodCostRatioMin` → `bloodCostRatioMax`; setting both to the same value recreates a flat ratio.
-- All logic is runtime-detected through NeoForge events; no parent APIs are linked at compile time.
+- Project: Vampire Spells Addon (`com.vampirespells.addon`).
+- Active target: Minecraft 1.21.1, NeoForge, Java 21.
+- Package/mod id: `com.vampirespells.addon.*` / `vampire_spells_addon`.
+- The 1.20.1 port is explicitly out of scope until the 1.21.1 line is stable.
+- Treat this as an actively maintained compatibility mod, not as a finished or
+  fully verified project. A successful compile does not prove runtime API or
+  gameplay compatibility.
 
-## Technical Notes
-- **Event Hooks**:
-  - `LivingDamageEvent.Pre` (NeoForge) handles Ray/Devour blood restoration.
-  - `SpellPreCastEvent`, `SpellOnCastEvent`, and `SpellCooldownAddedEvent.Pre` are attached reflectively to apply blood usage and cooldown multipliers.
-  - `SpellDamageEvent`, `SpellHealEvent`, and `LivingHealEvent` impose holy-school backlash on vampires.
-- **Reflection Helpers**: All access to Vampirism (`VampirismAPI`, `IVampirePlayer`, `IDrinkBloodContext`) and Iron's Spells (`SpellRegistry`, spell metadata) is performed via cached reflection lookups.
-- **Blood Cost Logic**: Mana cost is mapped onto the `[bloodCostManaFloor, bloodCostManaCeiling]` band, blending between `bloodCostRatioMin` and `bloodCostRatioMax`, then rounded up.
-- **Cooldown Scaling**: High-blood casts use `highBloodCooldownMultiplier`, low-blood casts use `lowBloodCooldownMultiplier` before NeoForge applies the cooldown.
-- **Mana Adjustments**: Devour's mana cost is multiplied by `devourManaMultiplier` via `SpellOnCastEvent#setManaCost`.
+## Sources of Truth
 
-## Configuration
-- A server config file (`config/vampire_spells_addon-server.toml`) is generated automatically.
-- `blood_spells.bloodCostManaFloor`: Lowest mana cost used when normalising mana → blood ratios.
-- `blood_spells.bloodCostManaCeiling`: Highest mana cost used when normalising mana → blood ratios.
-- `blood_spells.bloodCostRatioMin`: Blood-per-mana ratio at or below the mana floor.
-- `blood_spells.bloodCostRatioMax`: Blood-per-mana ratio at or above the mana ceiling.
-- `blood_spells.highBloodThresholdFraction`: Fraction of max blood that qualifies for the high-blood casting state.
-- `blood_spells.highBloodCooldownMultiplier`: Cooldown multiplier applied in the high-blood state.
-- `blood_spells.lowBloodCooldownMultiplier`: Cooldown multiplier applied when below the threshold (blood is not spent).
-- `blood_spells.devourManaMultiplier`: Multiplier applied to Devour's mana cost.
-- `blood_spells.devourBloodRestoreMultiplier`: Damage → blood multiplier for Devour.
-- `blood_spells.devourBloodSaturation`: Saturation modifier used when Devour restores blood.
-- `blood_spells.rayBloodRestoreMultiplier`: Damage → blood multiplier for Ray of Siphoning.
-- `blood_spells.rayBloodSaturation`: Saturation modifier used when Ray of Siphoning restores blood.
+- `gradle.properties`: build baseline, metadata floors, and development runtime
+  dependency versions.
+- `src/main/resources/META-INF/neoforge.mods.toml`: required runtime mods and
+  accepted version ranges after resource expansion.
+- `src/main/java/com/vampirespells/addon/`: implemented behavior.
+- `dependency-source/`: ignored, read-only upstream reference clones.
+- `AGENTS.md`: maintenance workflow, verified contracts, and known risks.
+- `README.md`: concise user-facing behavior and build instructions.
 
-## Build & Run
-```bash
-./gradlew build              # build
-./gradlew runClient          # client
-./gradlew runData            # data gen
-./gradlew runGameTestServer  # tests
+Do not use the legacy `CLAUDE.md` text as an independent source of project
+facts. It should only direct tools to this file.
+
+## Current Baseline
+
+- NeoForge compile baseline: `21.1.200`.
+- Runtime compatibility floors:
+  - Vampirism `1.10.7`.
+  - Iron's Spells 'n Spellbooks `1.21.1-3.14.3`.
+- Current development runtime releases:
+  - Vampirism Maven artifact `1.21-1.10.12`.
+  - Iron's Spells `1.21.1-3.16.2`.
+- Upstream source snapshots used for the July 2026 audit:
+  - Iron's Spells branch `1.21`, version `3.16.2`, commit `e57a7dcb`.
+  - Vampirism branch `version/1.21/latest`, source version `1.10.13`, commit
+    `c3224867`. This source version was newer than the published `1.21` Maven
+    artifact at audit time.
+  - NeoForge branch `1.21.1`, commit `73ab9150`.
+
+Keep compatibility floors separate from current tested/reference versions.
+Only raise a floor when the addon intentionally stops supporting older parent
+versions and the new range has been tested.
+
+## Implemented Behavior
+
+- Ray of Siphoning keeps its damage and restores vampire blood from the
+  `LivingDamageEvent.Pre` damage value using configurable multiplier and
+  saturation values.
+- Devour restores configurable vampire blood and multiplies its mana cost.
+- Eight configured blood spells make a high/low-blood decision:
+  `wither_skull`, `sacrifice`, `raise_dead`, `heartstop`, `blood_step`,
+  `blood_slash`, `blood_needles`, and `acupuncture`.
+  - At high blood they spend additional blood and use the high-blood cooldown
+    multiplier.
+  - At low blood they skip blood spending and use the low-blood cooldown
+    multiplier.
+  - The current implementation does not remove the normal Iron's Spells mana
+    cost; blood is an additional cost.
+- Holy damage reflects onto vampire player casters. Vampirism NPC vampires take
+  doubled holy damage in the currently handled path.
+- Holy heals damage vampire casters/targets and queue suppression of the
+  corresponding `LivingHealEvent` amount.
+- Holy utility spells (`angel_wing`, `fortify`, `wisp`, `haste`, `cleanse`, and
+  `sunbeam`) deal 5 damage to a vampire caster and cancel the cast.
+
+The server config is generated as
+`config/vampire_spells_addon-server.toml`. Configuration definitions live in
+`AddonConfig`; do not duplicate defaults in code or documentation.
+
+## Integration Architecture
+
+The addon compiles only against Minecraft and NeoForge. Parent-mod access is
+runtime-only and reflective so their classes are never bundled into this JAR.
+
+Verified Iron's Spells reflection targets for the current source snapshot:
+
+- Events: `SpellPreCastEvent`, `SpellOnCastEvent`,
+  `SpellCooldownAddedEvent.Pre`, `SpellDamageEvent`, and `SpellHealEvent`.
+- `SpellDamageSource#spell()` and inherited `DamageSource#getEntity()`.
+- `SpellRegistry#getSpell(ResourceLocation)`.
+- `AbstractSpell#getSpellResource`, `getSchoolType`, and `getManaCost`.
+- `SchoolType#getId`.
+
+Verified Vampirism reflection targets:
+
+- `VampirismAPI#vampirePlayer(Player)`.
+- `IVampirePlayer#getLevel`, `getBloodLevel`, `getBloodStats`, and `useBlood`.
+- `IBloodStats#getMaxBlood`.
+- Both observed `IVampire#drinkBlood` overloads.
+- `IDrinkBloodContext` entity/stack/block-state/block-position accessors.
+- `de.teamlapen.vampirism.api.entity.vampire.IVampire` as the NPC marker.
+
+Verified NeoForge contracts:
+
+- Four-argument event-bus `addListener(EventPriority, boolean, Class,
+  Consumer)` for reflective parent events.
+- `LivingDamageEvent.Pre#getNewDamage`.
+- `LivingHealEvent#getAmount/setAmount`.
+
+Expected event order matters:
+
+```text
+SpellPreCastEvent
+-> channel/cast start
+-> SpellOnCastEvent
+-> Iron's Spells mana debit
+-> spell implementation
+-> SpellCooldownAddedEvent.Pre
+
+SpellDamageEvent
+-> school resistance / friendly-fire checks
+-> LivingEntity.hurt
+-> LivingDamageEvent.Pre
+-> absorption and health change
+-> LivingDamageEvent.Post
+
+SpellHealEvent
+-> LivingEntity.heal
+-> LivingHealEvent
 ```
-- Build output: `build/libs/vampire_spells_addon-1.21.1-0.0.6.jar`
-- Copy helper (if desired): `cp build/libs/vampire_spells_addon-*.jar ./VampireSpellsAddon.jar`
 
-## Development Guardrails
-1. **Do not add** compile-time dependencies on either parent mod.
-2. **Stay in our namespace** (`com.vampirespells.addon.*`). No `io.redspace.*`, `de.teamlapen.*`, or `net.neoforged.*` classes.
-3. **Reuse reflection helpers** inside `SpellEventHandler` for any future integrations.
-4. **Preserve dynamic event registration**; do not hard-link to Iron's Spells classes at compile time.
-5. **Jar hygiene**: confirm final jar only contains our classes and metadata when shipping (`jar -tf`).
+## Reflection and Packaging Guardrails
 
-## Validation Checklist
-- [ ] `./gradlew build` succeeds.
-- [ ] Ray of Siphoning restores blood at the configured multiplier and saturation.
-- [ ] Devour heals blood/mana in line with the config multipliers.
-- [ ] High-blood vampire casts spend blood and apply the high-blood cooldown multiplier.
-- [ ] Low-blood vampire casts skip the blood drain and apply the low-blood cooldown multiplier.
-- [ ] Holy damage spells reflect damage back onto vampire casters and deal 2× damage to Vampirism NPC vampires.
-- [ ] Holy heals damage vampire casters/targets and the underlying heals are suppressed via `LivingHealEvent`.
-- [ ] Holy utility spells (`angel_wing`, `fortify`, `wisp`, `haste`, `cleanse`, `sunbeam`) deal 5 damage to vampire casters and the cast is cancelled.
-- [ ] Non-vampires continue to cast normally without blood/holy penalties.
-- [ ] Reflection listeners register without logging errors.
-- [ ] Log output shows informative messages for blood gains/losses and holy backlash.
+1. Direct imports are allowed only from this addon, Java, Minecraft, and
+   NeoForge.
+2. Never add parent-mod compile dependencies, copied API classes, or stubs under
+   `io.redspace.*` or `de.teamlapen.*`.
+3. Development runtime dependencies are allowed through `localRuntime`; they
+   must not extend the compile classpath or be shaded into the addon JAR.
+4. Keep parent events dynamically registered on `NeoForge.EVENT_BUS`.
+5. Reuse cached reflection resolution, handle missing members explicitly, and
+   avoid per-tick/per-hit warning spam for a permanently missing contract.
+6. Preserve normal behavior for non-vampires and unrelated spells.
+7. Never copy classes or resources from `dependency-source/` into the addon.
+8. The main JAR may contain only addon classes/resources and NeoForge metadata.
 
-## Troubleshooting
-- **Missing parent mods**: Startup logs will report missing APIs; addon should fail gracefully.
-- **Unexpected blood usage**: verify threshold/config values; ensure Vampirism API method names still match (`getBloodStats`, `useBlood`).
-- **Holy backlash missing**: confirm `SpellDamageEvent`/`SpellHealEvent` listeners register (debug log) and that the spell ID is holy.
-- **Cooldown not scaling**: confirm the `SpellCooldownAddedEvent.Pre` listener registers (look for debug log).
-- **Devour mana unchanged**: confirm no other mods set the mana cost after our handler, or adjust `devourManaMultiplier`.
+`SpellEventHandler.java` currently exceeds the 600-line project limit. Before
+adding another mechanic, split reflection access, cast state, blood mechanics,
+and holy mechanics into focused classes without changing the reflection-only
+boundary.
 
-## Build Artifact Verification
+## Upstream Update Workflow
+
+When updating a parent mod or NeoForge:
+
+1. Refresh the appropriate ignored clone under `dependency-source/` without
+   adding it to this repository.
+2. Record branch, commit, declared version, and whether that version is actually
+   published to Maven.
+3. Use `rg` to locate every reflected class, nested event class, and method
+   signature in the upstream source.
+4. Check event emission sites, cancellation rules, and ordering; matching names
+   alone are insufficient.
+5. Update development runtime versions independently from metadata floors.
+6. Run the build and JAR checks below.
+7. Smoke-test both the compatibility floor and the current release when a
+   claimed version range spans both.
+8. Update the snapshot section and durable MemPalace knowledge after verification.
+
+## Build and Dependency Workflow
+
+Use the committed Gradle wrapper and Java 21. Never commit a machine-specific
+`org.gradle.java.home` value.
+
 ```bash
-jar -tf build/libs/vampire_spells_addon-1.21.1-0.0.6.jar
+./gradlew compileJava processResources
+./gradlew --no-daemon clean build
+./gradlew resolveParentRuntime
+./gradlew runClient
+./gradlew runServer
+./gradlew runData
+./gradlew runGameTestServer
 ```
-Expect only our package and NeoForge descriptors (`META-INF/neoforge.mods.toml`).
+
+The first build downloads Gradle, a Java 21 toolchain when needed, NeoForge,
+mappings, and other build dependencies. Parent mods and their transitive mods
+belong on `localRuntime` for development launches. `dependency-source/` is not a
+Gradle input.
+
+`runClient`, `runServer`, and `runGameTestServer` only become meaningful
+integration checks when Vampirism, Iron's Spells, Iron's Lib, GeckoLib, Player
+Animator, Curios, and Vampirism's runtime dependencies are all resolved.
+
+There are currently no automated unit tests or GameTests. A successful
+`runGameTestServer` with zero tests is not gameplay evidence.
+
+## GitHub Actions and Versioning
+
+`.github/workflows/build.yml` runs on pushes, pull requests, and manual
+dispatches with Java 21 and the committed wrapper. It builds, runs the Gradle
+verification tasks, and uploads only the main JAR.
+
+`mod_version` in `gradle.properties` is the version baseline. CI adds
+`github.run_number` to its numeric patch component and passes the result through
+`-Pmod_version`; the generated `neoforge.mods.toml`, manifest, JAR filename, and
+artifact name therefore share one automatically increasing version. Do not add
+routine version-bump commits for CI builds. Change the baseline only for an
+intentional version-line reset or release policy change.
+
+## Verification Pipeline
+
+Quick feedback:
+
+```bash
+./gradlew compileJava processResources
+```
+
+Required before committing build or code changes:
+
+```bash
+./gradlew --no-daemon clean build
+jar --list --file build/libs/vampire_spells_addon-neoforge-*.jar
+```
+
+Verify all of the following:
+
+- No unexpanded `${...}` placeholders remain in `META-INF/neoforge.mods.toml`.
+- No `io/redspace/`, `de/teamlapen/`, or bundled `net/neoforged/` classes exist
+  in the main JAR.
+- The main JAR, not `*-sources.jar`, is selected for distribution.
+- The JAR version, manifest version, and expanded mod version agree.
+- Reflection listeners register without warnings in a real development launch.
+- Client and dedicated-server smoke tests include both parent mods and all
+  required runtime dependencies.
+
+Manual gameplay coverage for integration changes:
+
+- vampire and non-vampire player paths;
+- Vampirism NPC and ordinary living targets;
+- high/low/insufficient blood, cast cancellation, channeled casts, and recasts;
+- Ray and Devour against armor, absorption, lethal/overkill, and invalid targets;
+- each blood-cost spell at multiple levels;
+- holy damage, self-heal, targeted heal, area heal, utility, and friendly fire;
+- logout/death/dimension transition while cast state is pending.
+
+## Known Risks Requiring Runtime Validation
+
+- Ray and Devour restore blood from `LivingDamageEvent.Pre`, before absorption,
+  overkill, and final health loss are known. Iron's Spells lifesteal uses the
+  post-damage stage.
+- Devour's mana multiplier currently applies to non-vampires and is changed only
+  after the original affordability check.
+- Holy damage reflection uses the early `SpellDamageEvent` amount. Later
+  resistance, friendly-fire, or cancellation can make reflected and delivered
+  damage diverge.
+- Holy-heal suppression stores `UUID -> pending amount`; an altered or missing
+  heal event can leave residue that suppresses a later unrelated heal.
+- Blood cast decisions can become stale between pre-cast, cast, cooldown, and
+  logout/cancellation. The current maps have no explicit lifecycle cleanup.
+- The high-blood threshold uses integer rounding rather than an exact fractional
+  comparison.
+- `HOLY_HEAL_SPELLS` is currently declared but unused.
+
+Do not silently change these mechanics during unrelated maintenance. Reproduce
+the behavior, define the intended rule, add focused validation, and then change
+it in a separate commit.
+
+## Release Checklist
+
+1. Build from a clean checkout with Java 21 and the committed wrapper.
+2. Confirm parent mod versions, Maven availability, and metadata floors.
+3. Run JAR hygiene verification and inspect the expanded mod metadata.
+4. Complete client and dedicated-server smoke tests with the runtime mod set.
+5. Complete the manual gameplay matrix relevant to the release.
+6. Tag/release the exact commit and attach the main JAR produced by CI.
+
+<!-- LOCAL_MEMPALACE_MODULE_START -->
+## MemPalace Local Memory
+
+This repository uses project-local MemPalace storage. Memory for this project
+belongs under `.mempalace/`; do not use the global `~/.mempalace` palace for
+project work.
+
+Local layout:
+
+```text
+.mempalace/
+  config.json
+  known_entities.json
+  mempalace.bat
+  mempalace.ps1
+  mempalace.sh
+  palace/
+```
+
+Initialize or refresh local memory:
+
+macOS:
+
+```bash
+bash "${CODEX_HOME:-$HOME/.codex}/scripts/init-local-mempalace.sh" --project-path "$PWD"
+```
+
+Windows:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.codex\scripts\init-local-mempalace.ps1" -ProjectPath "$PWD"
+```
+
+Mine the repository after initialization:
+
+macOS:
+
+```bash
+bash "${CODEX_HOME:-$HOME/.codex}/scripts/init-local-mempalace.sh" --project-path "$PWD" --mine
+```
+
+Windows:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.codex\scripts\init-local-mempalace.ps1" -ProjectPath "$PWD" -Mine
+```
+
+Run manual commands only through the project launcher:
+
+```powershell
+.\.mempalace\mempalace.ps1 status
+```
+
+Codex MCP should use the stable wrapper in Codex home. If the palace changes
+outside a running MCP session, reconnect before relying on reads.
+<!-- LOCAL_MEMPALACE_MODULE_END -->
