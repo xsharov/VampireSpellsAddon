@@ -51,7 +51,7 @@ jobs:
           echo "Building version $build_version"
 
       - name: Build and verify
-        run: ./gradlew --no-daemon clean build --stacktrace -Pmod_version="${{ steps.version.outputs.version }}"
+        run: ./gradlew --no-daemon clean build resolveParentRuntime --stacktrace -Pmod_version="${{ steps.version.outputs.version }}"
 
       - name: Upload main JAR
         uses: actions/upload-artifact@v6

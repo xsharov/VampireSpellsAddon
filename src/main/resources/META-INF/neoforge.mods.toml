@@ -30,7 +30,7 @@ side = "BOTH"
 [[dependencies.${mod_id}]]
 modId = "vampirism"
 type = "required"
-versionRange = "[${vampirism_version},)"
+versionRange = "${vampirism_version_range}"
 ordering = "AFTER"
 side = "BOTH"
 
@@ -38,6 +38,6 @@ side = "BOTH"
 [[dependencies.${mod_id}]]
 modId = "irons_spellbooks"
 type = "required"
-versionRange = "[${irons_spells_version},)"
+versionRange = "${irons_spells_version_range}"
 ordering = "AFTER"
 side = "BOTH"

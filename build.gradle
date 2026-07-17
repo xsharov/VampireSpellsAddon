@@ -1,4 +1,5 @@
 import java.util.zip.ZipFile
+import java.util.jar.Manifest
 
 plugins {
     id 'java-library'
@@ -27,16 +28,16 @@ runs {
     }
 
     client {
-        systemProperty 'forge.enabledGameTestNamespaces', project.mod_id
+        systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
     }
 
     server {
-        systemProperty 'forge.enabledGameTestNamespaces', project.mod_id
+        systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
         arguments.add '--nogui'
     }
 
     gameTestServer {
-        systemProperty 'forge.enabledGameTestNamespaces', project.mod_id
+        systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
     }
 
     data {
@@ -80,13 +81,21 @@ dependencies {
     // Parent mods stay off the compile classpath. localRuntime is used only by
     // NeoGradle development launches and must never be bundled into this JAR.
     localRuntime "io.redspace:irons_spellbooks:${irons_spells_runtime_version}"
-    localRuntime "de.teamlapen.vampirism:Vampirism:${vampirism_runtime_version}"
+    localRuntime("de.teamlapen.vampirism:Vampirism:${vampirism_runtime_version}") {
+        // Vampirism's POM still references the 1.21 JEI artifact. Iron's
+        // current 1.21.1 line uses a different artifact id, so select one JAR.
+        exclude group: 'mezz.jei'
+    }
 
     // Iron's Spells runtime dependencies are not exported by its published POM.
     localRuntime "software.bernie.geckolib:geckolib-neoforge-${minecraft_version}:${geckolib_version}"
     localRuntime "dev.kosmx.player-anim:player-animation-lib-forge:${player_animator_version}"
     localRuntime "top.theillusivec4.curios:curios-neoforge:${curios_version}+${minecraft_version}"
     localRuntime "io.redspace:irons_lib:${irons_lib_version}"
+    localRuntime "mezz.jei:jei-${jei_mc_version}-neoforge:${jei_version}"
+
+    testImplementation "org.junit.jupiter:junit-jupiter:5.10.2"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 }
 
 tasks.register('resolveParentRuntime') {
@@ -118,7 +127,9 @@ tasks.withType(ProcessResources).configureEach {
             mod_display_url        : mod_display_url,
             mod_issue_tracker      : mod_issue_tracker,
             vampirism_version      : vampirism_version,
-            irons_spells_version   : irons_spells_version
+            vampirism_version_range: vampirism_version_range,
+            irons_spells_version   : irons_spells_version,
+            irons_spells_version_range: irons_spells_version_range
     ]
     inputs.properties replaceProperties
 
@@ -128,6 +139,11 @@ tasks.withType(ProcessResources).configureEach {
 }
 
 jar {
+    from('LICENSE') {
+        into 'META-INF'
+        rename { "LICENSE_${mod_id}" }
+    }
+
     manifest {
         attributes([
                 "Specification-Title"     : mod_name,
@@ -175,6 +191,39 @@ def verifyJarContents = tasks.register('verifyJarContents') {
             if (metadataText.contains('${')) {
                 throw new GradleException("Unexpanded placeholders remain in ${archive.name}")
             }
+
+            if (!metadataText.contains("modId = \"${mod_id}\"")) {
+                throw new GradleException("Expected mod id ${mod_id} is missing from ${archive.name}")
+            }
+            if (!metadataText.contains("versionRange = \"${vampirism_version_range}\"")
+                    || !metadataText.contains("versionRange = \"${irons_spells_version_range}\"")) {
+                throw new GradleException("Verified parent dependency ranges are missing from ${archive.name}")
+            }
+
+            String expectedVersion = project.version.toString()
+            def modVersionMatch = metadataText =~ /(?m)^version\s*=\s*"([^"]+)"\s*$/
+            if (!modVersionMatch.find() || modVersionMatch.group(1) != expectedVersion) {
+                throw new GradleException("Mod metadata version does not match ${expectedVersion} in ${archive.name}")
+            }
+
+            def manifestEntry = zip.getEntry('META-INF/MANIFEST.MF')
+            if (manifestEntry == null) {
+                throw new GradleException("Missing META-INF/MANIFEST.MF in ${archive.name}")
+            }
+            Manifest manifest = new Manifest(zip.getInputStream(manifestEntry))
+            String implementationVersion = manifest.mainAttributes.getValue('Implementation-Version')
+            if (implementationVersion != expectedVersion) {
+                throw new GradleException("Manifest version ${implementationVersion} does not match ${expectedVersion} in ${archive.name}")
+            }
+
+            String expectedArchiveName = "${base.archivesName.get()}-${expectedVersion}.jar"
+            if (archive.name != expectedArchiveName) {
+                throw new GradleException("Unexpected main JAR name ${archive.name}; expected ${expectedArchiveName}")
+            }
+
+            if (zip.getEntry("META-INF/LICENSE_${mod_id}") == null) {
+                throw new GradleException("Packaged license is missing from ${archive.name}")
+            }
         }
     }
 }
@@ -189,6 +238,10 @@ java {
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
+}
+
+tasks.withType(Test).configureEach {
+    useJUnitPlatform()
 }
 
 idea {
