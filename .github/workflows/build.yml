@@ -61,6 +61,7 @@ jobs:
           stale_draft_target=""
           stale_draft_author=""
           stale_draft_managed=""
+          stale_draft_deleted=false
           latest_tag_name=""
           latest_tag_sha=""
           latest_tag_patch=-1
@@ -217,6 +218,7 @@ jobs:
             fi
             unset 'tag_shas[$stale_draft_tag]'
             existing_version="$stale_draft_tag"
+            stale_draft_deleted=true
             echo "Reusing $stale_draft_tag for descendant merge $MERGE_SHA"
           fi
 
@@ -233,40 +235,91 @@ jobs:
           fi
 
           read_release() {
-            local rows tag_name is_draft target found=""
+            local rows tag_name is_draft target author managed found=""
             if ! rows="$(
               gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
-                --jq '.[] | [.tag_name, .draft, .target_commitish] | @tsv'
+                --jq '.[] | [.tag_name, .draft, .target_commitish, .author.login, ((.body // "") | contains("<!-- vampire-spells-addon-release-workflow -->"))] | @tsv'
             )"; then
               return 1
             fi
-            while IFS=$'\t' read -r tag_name is_draft target; do
+            while IFS=$'\t' read -r tag_name is_draft target author managed; do
               [[ "$tag_name" == "$build_version" ]] || continue
               if [[ -n "$found" ]]; then
                 echo "GitHub returned duplicate releases for tag $build_version" >&2
                 return 1
               fi
-              found="${is_draft}"$'\t'"${target}"
+              found="${is_draft}"$'\t'"${target}"$'\t'"${author}"$'\t'"${managed}"
             done <<< "$rows"
             printf '%s' "$found"
           }
 
-          release_info="$(read_release)"
-          if [[ -z "$release_info" ]]; then
-            gh release create "$build_version" \
-              --draft \
-              --target "$MERGE_SHA" \
-              --title "Vampire Spells Addon $build_version" \
-              --notes "${release_marker}"$'\n\n'"Built automatically after merging pull request #$PR_NUMBER into master." \
-              --generate-notes
+          create_draft_release() {
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/releases" \
+              -f "tag_name=$build_version" \
+              -f "target_commitish=$MERGE_SHA" \
+              -f "name=Vampire Spells Addon $build_version" \
+              -f "body=${release_marker}"$'\n\n'"Built automatically after merging pull request #$PR_NUMBER into master." \
+              -F draft=true \
+              -F generate_release_notes=true \
+              --jq '[.draft, .target_commitish, .author.login, ((.body // "") | contains("<!-- vampire-spells-addon-release-workflow -->"))] | @tsv'
+          }
+
+          # GitHub's release list can lag behind creates and deletes. Trust the
+          # create response, and retry only while verified workflow state settles.
+          reserve_draft_release() {
+            local attempt current_info current_is_draft current_target current_author current_managed created_info
+            for attempt in 1 2 3 4 5 6; do
+              if ! current_info="$(read_release)"; then
+                return 1
+              fi
+              if [[ -n "$current_info" ]]; then
+                IFS=$'\t' read -r current_is_draft current_target current_author current_managed <<< "$current_info"
+                if [[ "$current_is_draft" == "true" && "$current_target" == "$MERGE_SHA" && \
+                      "$current_author" == "github-actions[bot]" && "$current_managed" == "true" ]]; then
+                  printf '%s' "$current_info"
+                  return 0
+                fi
+                if [[ "$stale_draft_deleted" != "true" || "$current_is_draft" != "true" || \
+                      "$current_target" != "$stale_draft_target" || "$current_author" != "$stale_draft_author" || \
+                      "$current_managed" != "$stale_draft_managed" ]]; then
+                  echo "Release $build_version changed unexpectedly while reserving the version" >&2
+                  return 1
+                fi
+              elif created_info="$(create_draft_release)"; then
+                if [[ -z "$created_info" ]]; then
+                  echo "GitHub returned no data after creating draft release $build_version" >&2
+                  return 1
+                fi
+                printf '%s' "$created_info"
+                return 0
+              else
+                echo "Draft creation attempt $attempt of 6 did not complete; checking GitHub state before retry" >&2
+              fi
+              if (( attempt < 6 )); then
+                sleep 2
+              fi
+            done
+            echo "Could not reserve draft release $build_version after 6 attempts" >&2
+            return 1
+          }
+
+          if [[ "$stale_draft_deleted" == "true" ]]; then
+            release_info=""
+          else
             release_info="$(read_release)"
-            if [[ -z "$release_info" ]]; then
-              echo "Draft release $build_version was not created" >&2
+          fi
+          if [[ -z "$release_info" ]]; then
+            if ! release_info="$(reserve_draft_release)"; then
               exit 1
             fi
           fi
 
-          IFS=$'\t' read -r release_is_draft release_target <<< "$release_info"
+          IFS=$'\t' read -r release_is_draft release_target release_author release_managed <<< "$release_info"
+          if [[ "$release_is_draft" == "true" && \
+                ( "$release_author" != "github-actions[bot]" || "$release_managed" != "true" ) ]]; then
+            echo "Draft release $build_version was not created by this workflow" >&2
+            exit 1
+          fi
           if [[ "$release_is_draft" == "true" && "$release_target" != "$MERGE_SHA" ]]; then
             echo "Draft release $build_version targets $release_target instead of $MERGE_SHA" >&2
             exit 1
@@ -353,12 +406,10 @@ jobs:
           GH_REPO: ${{ github.repository }}
           BUILD_VERSION: ${{ needs.reserve.outputs.version }}
           MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
 
           release_tag="$BUILD_VERSION"
-          release_marker='<!-- vampire-spells-addon-release-workflow -->'
           main_jar="release/vampire_spells_addon-neoforge-${BUILD_VERSION}.jar"
           asset_name="$(basename "$main_jar")"
 
@@ -426,20 +477,20 @@ jobs:
           }
 
           read_release() {
-            local rows tag_name is_draft target found=""
+            local rows tag_name is_draft target author managed found=""
             if ! rows="$(
               gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
-                --jq '.[] | [.tag_name, .draft, .target_commitish] | @tsv'
+                --jq '.[] | [.tag_name, .draft, .target_commitish, .author.login, ((.body // "") | contains("<!-- vampire-spells-addon-release-workflow -->"))] | @tsv'
             )"; then
               return 1
             fi
-            while IFS=$'\t' read -r tag_name is_draft target; do
+            while IFS=$'\t' read -r tag_name is_draft target author managed; do
               [[ "$tag_name" == "$release_tag" ]] || continue
               if [[ -n "$found" ]]; then
                 echo "GitHub returned duplicate releases for tag $release_tag" >&2
                 return 1
               fi
-              found="${is_draft}"$'\t'"${target}"
+              found="${is_draft}"$'\t'"${target}"$'\t'"${author}"$'\t'"${managed}"
             done <<< "$rows"
             printf '%s' "$found"
           }
@@ -452,20 +503,16 @@ jobs:
 
           release_info="$(read_release)"
           if [[ -z "$release_info" ]]; then
-            gh release create "$release_tag" \
-              --draft \
-              --target "$MERGE_SHA" \
-              --title "Vampire Spells Addon $BUILD_VERSION" \
-              --notes "${release_marker}"$'\n\n'"Built automatically after merging pull request #$PR_NUMBER into master." \
-              --generate-notes
-            release_info="$(read_release)"
-            if [[ -z "$release_info" ]]; then
-              echo "Draft release $release_tag was not created" >&2
-              exit 1
-            fi
+            echo "Reserved release $release_tag disappeared before publishing" >&2
+            exit 1
           fi
 
-          IFS=$'\t' read -r release_is_draft release_target <<< "$release_info"
+          IFS=$'\t' read -r release_is_draft release_target release_author release_managed <<< "$release_info"
+          if [[ "$release_is_draft" == "true" && \
+                ( "$release_author" != "github-actions[bot]" || "$release_managed" != "true" ) ]]; then
+            echo "Draft release $release_tag was not created by this workflow" >&2
+            exit 1
+          fi
           if [[ -z "$tag_sha" && "$release_is_draft" != "true" ]]; then
             echo "Published release $release_tag exists without its Git tag" >&2
             exit 1
@@ -483,7 +530,20 @@ jobs:
               exit 1
             fi
             gh release delete-asset "$release_tag" "$asset_name" --yes
-            asset_state=""
+            for attempt in 1 2 3 4 5 6; do
+              asset_info="$(read_asset)"
+              IFS=$'\t' read -r asset_state asset_digest <<< "$asset_info"
+              if [[ -z "$asset_state" ]]; then
+                break
+              fi
+              if (( attempt < 6 )); then
+                sleep 2
+              fi
+            done
+            if [[ -n "$asset_state" ]]; then
+              echo "Deleted release asset $asset_name is still visible" >&2
+              exit 1
+            fi
           fi
 
           if [[ -z "$asset_state" ]]; then
@@ -492,8 +552,16 @@ jobs:
             echo "Release $release_tag already contains the verified $asset_name"
           fi
 
-          asset_info="$(read_asset)"
-          IFS=$'\t' read -r asset_state asset_digest <<< "$asset_info"
+          for attempt in 1 2 3 4 5 6; do
+            asset_info="$(read_asset)"
+            IFS=$'\t' read -r asset_state asset_digest <<< "$asset_info"
+            if [[ "$asset_state" == "uploaded" && "$asset_digest" == "$expected_digest" ]]; then
+              break
+            fi
+            if (( attempt < 6 )); then
+              sleep 2
+            fi
+          done
           if [[ "$asset_state" != "uploaded" || "$asset_digest" != "$expected_digest" ]]; then
             echo "Release asset verification failed for $asset_name" >&2
             exit 1
@@ -501,9 +569,21 @@ jobs:
 
           if [[ "$release_is_draft" == "true" ]]; then
             gh release edit "$release_tag" --draft=false --latest
+            for attempt in 1 2 3 4 5 6; do
+              tag_sha="$(resolve_tag_sha "$release_tag")"
+              if [[ "$tag_sha" == "$MERGE_SHA" ]]; then
+                break
+              fi
+              if [[ -n "$tag_sha" ]]; then
+                echo "Published tag $release_tag points to $tag_sha instead of $MERGE_SHA" >&2
+                exit 1
+              fi
+              if (( attempt < 6 )); then
+                sleep 2
+              fi
+            done
           fi
 
-          tag_sha="$(resolve_tag_sha "$release_tag")"
           if [[ "$tag_sha" != "$MERGE_SHA" ]]; then
             echo "Published tag $release_tag points to $tag_sha instead of $MERGE_SHA" >&2
             exit 1
