@@ -1,13 +1,17 @@
 # Vampire Spells Addon
 
-Vampire Spells Addon is a NeoForge compatibility mod for Minecraft 1.21.1. It
-connects Iron's Spells 'n Spellbooks with Vampirism and changes selected spell
-behavior for vampire players.
+Vampire Spells Addon connects Iron's Spells 'n Spellbooks with Vampirism and
+changes selected spell behavior for vampire players. Each release supports two
+platforms:
 
-The integration compiles without either parent mod on its compile classpath,
-loads their APIs only at runtime, and does not package parent-mod classes in its
-JAR. Reflection handles the parent APIs, while two narrowly scoped runtime
-mixins replace the mana gate and reverse the Ray animation.
+- Minecraft 1.21.1 on NeoForge.
+- Minecraft 1.20.1 on Forge.
+
+The shared integration compiles without either parent mod on its compile
+classpath, loads their APIs only at runtime, and does not package parent-mod
+classes in either JAR. Reflection handles the parent APIs, platform adapters
+handle loader events and configuration, and narrow runtime mixins replace the
+mana gate and reverse the Ray animation.
 
 ## Current behavior
 
@@ -41,55 +45,59 @@ mixins replace the mana gate and reverse the Ray animation.
 - Cast and heal correlation state is bounded and cleared on lifecycle
   boundaries so nested or interrupted actions cannot affect an unrelated later
   action.
-- Server-side tuning is generated in
-  `config/vampire_spells_addon-server.toml`.
+- Server-side tuning is stored per world in
+  `<world>/serverconfig/vampire_spells_addon-server.toml`.
 
 ## Requirements
 
-- Minecraft 1.21.1
-- NeoForge `>=21.1.200` and `<21.2`
-- Vampirism `>=1.10.7` and `<1.11`
-- Iron's Spells 'n Spellbooks `>=1.21.1-3.14.3` and `<1.21.1-4`
+| Minecraft | Loader | Java | Vampirism | Iron's Spells |
+| --- | --- | --- | --- | --- |
+| 1.21.1 | NeoForge `>=21.1.200` and `<21.2` | 21 | `>=1.10.7` and `<1.11` | `>=1.21.1-3.14.3` and `<1.21.1-4` |
+| 1.20.1 | Forge `>=47.4.0` and `<48` | 17 | `>=1.10.7` and `<1.11` | `>=1.20.1-3.15.0` and `<1.20.1-4` |
 
-The development runtime currently resolves Iron's Spells `3.16.2` and
-Vampirism `1.21-1.10.12`, plus their required runtime libraries.
+Minecraft 1.20.1 deliberately uses Forge rather than NeoForge: supported
+Iron's Spells 3.15+ builds require the Forge 47.4 line, while the NeoForge
+1.20.1 line does not provide that loader baseline.
 
 ## Build and development
 
-Java 21 and the committed Gradle wrapper are required.
+Use the committed Gradle wrapper. Gradle selects the Java 21 toolchain for the
+1.21.1 target and Java 17 for the 1.20.1 target.
 
 ```bash
 ./gradlew test
-./gradlew compileJava processResources
 ./gradlew resolveParentRuntime
 ./gradlew --no-daemon clean build
-jar --list --file build/libs/vampire_spells_addon-neoforge-*.jar
+./gradlew collectReleaseJars
 ```
 
-Development launches with the resolved parent-mod runtime use:
+Root `test`, `build`, and `resolveParentRuntime` aggregate both platforms.
+Target-specific work uses qualified tasks:
 
 ```bash
-./gradlew runClient
-./gradlew runServer
-./gradlew runGameTestServer
+./gradlew :platforms:mc1_21_1:runClient
+./gradlew :platforms:mc1_21_1:runGameTestServer
+./gradlew :platforms:mc1_20_1:runClient
+./gradlew :platforms:mc1_20_1:runGameTestServer
 ```
 
-The distributable file is written to:
+The distributable files use the same release number and are collected in
+`build/release/`:
 
 ```text
-build/libs/vampire_spells_addon-neoforge-<version>.jar
+vampire_spells_addon-neoforge-1.21.1-<release>.jar
+vampire_spells_addon-forge-1.20.1-<release>.jar
 ```
 
-`build` also checks the expanded mod metadata, manifest and archive versions,
-packaged license, mixin resources, localized Ray descriptions, and absence of
-bundled parent-mod or NeoForge classes. Unit tests cover deterministic resource
-selection, blood and cooldown calculations, nested cast outcomes, and language
-resource structure.
-`runGameTestServer` additionally fails unless the development server logs a
-successful validation of every reflective parent-mod contract. CI runs that
-class-loading smoke check against both the current and compatibility-floor
-parent versions. There are no automated gameplay GameTests, so client and
-dedicated-server gameplay testing is still required for a release.
+Each platform build checks its expanded loader metadata, manifest and archive
+version, Java class-file level, packaged resources, and absence of bundled
+parent-mod or loader classes. `runGameTestServer` additionally fails unless the
+development server logs successful validation of every reflective parent-mod
+contract. Its disposable platform run directory is reset before every launch,
+so current and compatibility-floor profiles cannot reuse a world or config.
+CI runs both profiles on both platforms. There are no automated gameplay
+GameTests, so client and dedicated-server gameplay testing is still required
+for a release.
 
 ## Continuous integration and versions
 
@@ -97,23 +105,25 @@ GitHub Actions builds and publishes the mod only after a pull request targeting
 `master` is merged. Direct pushes, manual runs, and pull requests closed without
 merging do not build or publish a release.
 
-The release workflow takes the next numeric patch after the `mod_version`
-baseline and existing release tags in the same version line, then reserves it
-as a draft targeting the exact merge commit. A rerun for the same merge reuses
-that version. If its build fails, a later descendant merge safely takes over
-the workflow-created draft and reuses the reserved version; manual or unrelated
-drafts are never replaced automatically. After the full build and both
-parent-version smoke tests pass, CI uploads the verified main JAR and publishes
-the release. GitHub's automatically
-generated source ZIP and TAR archives are not installable mod files; use the
-attached `vampire_spells_addon-neoforge-*.jar`.
+The canonical release tag remains `1.21.1-X.Y.Z`. The workflow takes the next
+numeric patch after the `mod_version` baseline and existing tags, then reserves
+it as a draft targeting the exact merge commit. A rerun for the same merge
+reuses that version. If its build fails, a later descendant merge can safely
+take over the workflow-created draft; manual or unrelated drafts are never
+replaced automatically.
+
+CI builds and smoke-tests both targets independently, verifies both JAR
+digests, and publishes the draft only after both assets are present. GitHub's
+generated source archives are not installable mod files; choose the attached
+`neoforge-1.21.1` or `forge-1.20.1` JAR for your game and loader.
 
 ## Reference sources
 
 Ignored upstream clones live under `dependency-source/` and are used only to
 verify reflective API contracts. They are not Gradle inputs and are never
 packaged with the addon. The latest source review and remaining runtime risks
-are recorded in [COMPATIBILITY_AUDIT.md](COMPATIBILITY_AUDIT.md). Detailed
+are recorded in [COMPATIBILITY_AUDIT.md](COMPATIBILITY_AUDIT.md) and
+[COMPATIBILITY_AUDIT_1_20_1.md](COMPATIBILITY_AUDIT_1_20_1.md). Detailed
 maintenance instructions and durable contracts are in [AGENTS.md](AGENTS.md).
 
 ## License

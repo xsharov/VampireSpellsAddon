@@ -1,0 +1,42 @@
+modLoader = "javafml"
+loaderVersion = "${loader_version_range}"
+license = "${mod_license}"
+issueTrackerURL = "${mod_issue_tracker}"
+
+[[mods]]
+modId = "${mod_id}"
+version = "${mod_version}"
+displayName = "${mod_name}"
+logoFile = "vampire_spells_addon.png"
+description = '''${mod_description}'''
+credits = '''${mod_credits}'''
+authors = "${mod_authors}"
+displayURL = "${mod_display_url}"
+
+[[dependencies.${mod_id}]]
+modId = "${platform_loader_mod_id}"
+mandatory = true
+versionRange = "${platform_version_range}"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.${mod_id}]]
+modId = "minecraft"
+mandatory = true
+versionRange = "${minecraft_version_range}"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.${mod_id}]]
+modId = "vampirism"
+mandatory = true
+versionRange = "${vampirism_version_range}"
+ordering = "AFTER"
+side = "BOTH"
+
+[[dependencies.${mod_id}]]
+modId = "irons_spellbooks"
+mandatory = true
+versionRange = "${irons_spells_version_range}"
+ordering = "AFTER"
+side = "BOTH"

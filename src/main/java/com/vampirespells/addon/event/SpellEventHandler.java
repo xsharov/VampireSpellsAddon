@@ -3,22 +3,15 @@ package com.vampirespells.addon.event;
 import com.vampirespells.addon.VampireSpellsAddon;
 import com.vampirespells.addon.integration.IronsSpellsBridge;
 import com.vampirespells.addon.integration.VampirismBridge;
+import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
-import net.neoforged.bus.api.Event;
-import net.neoforged.bus.api.EventPriority;
-import net.neoforged.neoforge.common.NeoForge;
-import net.neoforged.neoforge.event.entity.living.LivingDamageEvent;
-import net.neoforged.neoforge.event.entity.living.LivingHealEvent;
-import net.neoforged.neoforge.event.entity.player.PlayerEvent;
-import net.neoforged.neoforge.event.server.ServerStoppedEvent;
-import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
 import java.util.Optional;
-import java.util.function.Consumer;
 
 /**
- * Registers the runtime-only parent-mod integration after both reflective
- * contracts have been validated.
+ * Owns loader-neutral integration state. Platform event adapters translate
+ * Forge and NeoForge events into these callbacks.
  */
 public final class SpellEventHandler {
 
@@ -33,10 +26,7 @@ public final class SpellEventHandler {
     private SpellEventHandler() {
     }
 
-    /**
-     * Resolves both parent APIs and installs all listeners once. Integration
-     * fails closed when either required contract is unavailable.
-     */
+    /** Resolves both parent APIs and installs all listeners once. */
     public static synchronized boolean register() {
         if (registrationAttempted) {
             return registered;
@@ -48,13 +38,11 @@ public final class SpellEventHandler {
         }
 
         try {
-            registerParentEvents();
-            registerNeoForgeEvents();
+            PlatformEvents.register();
             registered = true;
             return true;
         } catch (LinkageError | RuntimeException failure) {
-            CAST_STATE.clearTransientAll();
-            DAMAGE_STATE.clear();
+            clearTransientState();
             VampireSpellsAddon.LOGGER.error(
                     "Could not register Vampire Spells Addon event integration; mechanics are disabled",
                     failure
@@ -63,149 +51,107 @@ public final class SpellEventHandler {
         }
     }
 
-    private static void registerParentEvents() {
-        registerParentListener(
-                EventPriority.HIGHEST,
-                IronsSpellsBridge.spellPreCastEventClass(),
-                SpellEventHandler::onSpellPreCast
-        );
-        registerParentListener(
-                EventPriority.LOWEST,
-                IronsSpellsBridge.spellOnCastEventClass(),
-                BLOOD_SPELLS::onSpellOnCast
-        );
-        registerParentListener(
-                EventPriority.LOWEST,
-                IronsSpellsBridge.spellCooldownPreEventClass(),
-                BLOOD_SPELLS::onSpellCooldown
-        );
-        registerParentListener(
-                EventPriority.LOWEST,
-                IronsSpellsBridge.spellDamageEventClass(),
-                HOLY_SPELLS::onSpellDamage
-        );
-        registerParentListener(
-                EventPriority.LOWEST,
-                IronsSpellsBridge.spellHealEventClass(),
-                HOLY_SPELLS::onSpellHeal
-        );
+    static boolean isRegistered() {
+        return registered;
     }
 
-    private static void registerNeoForgeEvents() {
-        NeoForge.EVENT_BUS.addListener(
-                EventPriority.LOWEST,
-                false,
-                LivingDamageEvent.Pre.class,
-                SpellEventHandler::onLivingDamagePre
-        );
-        NeoForge.EVENT_BUS.addListener(
-                EventPriority.NORMAL,
-                false,
-                LivingDamageEvent.Post.class,
-                SpellEventHandler::onLivingDamagePost
-        );
-        NeoForge.EVENT_BUS.addListener(
-                EventPriority.HIGHEST,
-                true,
-                LivingHealEvent.class,
-                SpellEventHandler::onLivingHeal
-        );
-        NeoForge.EVENT_BUS.addListener(
-                PlayerEvent.PlayerLoggedOutEvent.class,
-                SpellEventHandler::onPlayerLoggedOut
-        );
-        NeoForge.EVENT_BUS.addListener(PlayerEvent.Clone.class, SpellEventHandler::onPlayerClone);
-        NeoForge.EVENT_BUS.addListener(ServerTickEvent.Post.class, SpellEventHandler::onServerTick);
-        NeoForge.EVENT_BUS.addListener(ServerStoppedEvent.class, SpellEventHandler::onServerStopped);
+    static void onSpellPreCast(Object event) {
+        if (registered) {
+            BLOOD_SPELLS.onSpellPreCast(event);
+            HOLY_SPELLS.onSpellPreCast(event);
+        }
     }
 
-    private static void onSpellPreCast(Object event) {
+    static void onSpellOnCast(Object event) {
+        if (registered) {
+            BLOOD_SPELLS.onSpellOnCast(event);
+        }
+    }
+
+    static void onSpellCooldown(Object event) {
+        if (registered) {
+            BLOOD_SPELLS.onSpellCooldown(event);
+        }
+    }
+
+    static void onSpellDamage(Object event) {
+        if (registered) {
+            HOLY_SPELLS.onSpellDamage(event);
+        }
+    }
+
+    static void onSpellHeal(Object event) {
+        if (registered) {
+            HOLY_SPELLS.onSpellHeal(event);
+        }
+    }
+
+    static void captureSpellDamage(LivingEntity entity, DamageSource source) {
+        if (registered && IronsSpellsBridge.inspectDamageSource(source).isPresent()) {
+            DAMAGE_STATE.capture(entity, source);
+        }
+    }
+
+    static void finishSpellDamage(LivingEntity entity, DamageSource source, float deliveredDamage) {
         if (!registered) {
             return;
         }
-        BLOOD_SPELLS.onSpellPreCast(event);
-        HOLY_SPELLS.onSpellPreCast(event);
+        dispatchDeliveredSpellDamage(entity, source, DAMAGE_STATE.finish(entity, source, deliveredDamage));
     }
 
-    private static void onLivingDamagePre(LivingDamageEvent.Pre event) {
-        if (!registered) {
-            return;
-        }
-        if (IronsSpellsBridge.inspectDamageSource(event.getSource()).isPresent()) {
-            DAMAGE_STATE.capture(event);
+    static void onFinalSpellDamage(LivingEntity entity, DamageSource source, float deliveredDamage) {
+        if (registered) {
+            float finiteDamage = Float.isFinite(deliveredDamage) ? Math.max(0f, deliveredDamage) : 0f;
+            dispatchDeliveredSpellDamage(entity, source, Math.min(finiteDamage, Math.max(0f, entity.getHealth())));
         }
     }
 
-    private static void onLivingDamagePost(LivingDamageEvent.Post event) {
-        if (!registered) {
-            return;
-        }
-        float actualHealthDamage = DAMAGE_STATE.finish(event);
+    private static void dispatchDeliveredSpellDamage(
+            LivingEntity entity,
+            DamageSource source,
+            float deliveredDamage
+    ) {
         Optional<IronsSpellsBridge.SpellDamageInfo> spellDamage =
-                IronsSpellsBridge.inspectDamageSource(event.getSource());
+                IronsSpellsBridge.inspectDamageSource(source);
         if (spellDamage.isEmpty()) {
             return;
         }
 
-        BLOOD_SPELLS.onDeliveredSpellDamage(spellDamage.get(), event.getEntity(), actualHealthDamage);
-        HOLY_SPELLS.onDeliveredSpellDamage(spellDamage.get(), actualHealthDamage);
+        BLOOD_SPELLS.onDeliveredSpellDamage(spellDamage.get(), entity, deliveredDamage);
+        HOLY_SPELLS.onDeliveredSpellDamage(spellDamage.get(), deliveredDamage);
     }
 
-    private static void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
-        if (!registered) {
-            return;
+    static void onPlayerLoggedOut(Player player) {
+        if (registered) {
+            CAST_STATE.clearTransientPlayer(player);
         }
-        CAST_STATE.clearTransientPlayer(event.getEntity());
     }
 
-    private static void onPlayerClone(PlayerEvent.Clone event) {
-        if (!registered) {
-            return;
+    static void onPlayerClone(Player original, Player clone) {
+        if (registered) {
+            CAST_STATE.clearTransientPlayer(original);
+            CAST_STATE.clearTransientPlayer(clone);
         }
-        CAST_STATE.clearTransientPlayer(event.getOriginal());
-        CAST_STATE.clearTransientPlayer(event.getEntity());
     }
 
-    private static void onServerTick(ServerTickEvent.Post event) {
-        if (!registered) {
-            return;
+    static void onServerTick(int serverTick) {
+        if (registered) {
+            CAST_STATE.purgeExpired(serverTick);
         }
-        CAST_STATE.purgeExpired(event.getServer().getTickCount());
     }
 
-    private static void onServerStopped(ServerStoppedEvent event) {
-        if (!registered) {
-            return;
+    static void onServerStopped() {
+        if (registered) {
+            clearTransientState();
         }
+    }
+
+    static boolean shouldCancelLivingHeal(LivingEntity entity, float amount) {
+        return registered && HOLY_SPELLS.shouldSuppressLivingHeal(entity, amount);
+    }
+
+    private static void clearTransientState() {
         CAST_STATE.clearTransientAll();
         DAMAGE_STATE.clear();
-    }
-
-    private static void onLivingHeal(LivingHealEvent event) {
-        if (registered) {
-            HOLY_SPELLS.onLivingHeal(event);
-        }
-    }
-
-    @SuppressWarnings({"rawtypes", "unchecked"})
-    private static void registerParentListener(
-            EventPriority priority,
-            Class<?> eventClass,
-            Consumer<Object> handler
-    ) {
-        if (eventClass == null || !Event.class.isAssignableFrom(eventClass)) {
-            throw new IllegalStateException("Resolved parent event is not a NeoForge Event: " + eventClass);
-        }
-        Consumer<Object> guardedHandler = event -> {
-            if (registered) {
-                handler.accept(event);
-            }
-        };
-        NeoForge.EVENT_BUS.addListener(
-                priority,
-                false,
-                (Class) eventClass,
-                (Consumer) guardedHandler
-        );
     }
 }

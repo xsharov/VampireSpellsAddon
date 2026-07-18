@@ -1,31 +1,31 @@
 package com.vampirespells.addon.config;
 
-import net.neoforged.neoforge.common.ModConfigSpec;
+import java.util.function.Supplier;
 
 public final class AddonConfig {
 
-    public static final ModConfigSpec SPEC;
+    public static final Object SPEC;
 
-    public static final ModConfigSpec.DoubleValue BLOOD_COST_RATIO_MIN;
-    public static final ModConfigSpec.DoubleValue BLOOD_COST_RATIO_MAX;
-    public static final ModConfigSpec.IntValue BLOOD_COST_MANA_FLOOR;
-    public static final ModConfigSpec.IntValue BLOOD_COST_MANA_CEILING;
+    public static final Supplier<Double> BLOOD_COST_RATIO_MIN;
+    public static final Supplier<Double> BLOOD_COST_RATIO_MAX;
+    public static final Supplier<Integer> BLOOD_COST_MANA_FLOOR;
+    public static final Supplier<Integer> BLOOD_COST_MANA_CEILING;
 
-    public static final ModConfigSpec.BooleanValue ALWAYS_USE_BLOOD_FOR_VAMPIRE_BLOOD_SPELLS;
-    public static final ModConfigSpec.DoubleValue VAMPIRE_BLOOD_SPELL_COOLDOWN_MULTIPLIER;
+    public static final Supplier<Boolean> ALWAYS_USE_BLOOD_FOR_VAMPIRE_BLOOD_SPELLS;
+    public static final Supplier<Double> VAMPIRE_BLOOD_SPELL_COOLDOWN_MULTIPLIER;
 
-    public static final ModConfigSpec.DoubleValue DEVOUR_MANA_MULTIPLIER;
-    public static final ModConfigSpec.DoubleValue DEVOUR_BLOOD_RESTORE_MULTIPLIER;
-    public static final ModConfigSpec.DoubleValue DEVOUR_BLOOD_SATURATION;
+    public static final Supplier<Double> DEVOUR_MANA_MULTIPLIER;
+    public static final Supplier<Double> DEVOUR_BLOOD_RESTORE_MULTIPLIER;
+    public static final Supplier<Double> DEVOUR_BLOOD_SATURATION;
 
-    public static final ModConfigSpec.DoubleValue RAY_BLOOD_RESTORE_MULTIPLIER;
-    public static final ModConfigSpec.DoubleValue RAY_BLOOD_SATURATION;
+    public static final Supplier<Double> RAY_BLOOD_RESTORE_MULTIPLIER;
+    public static final Supplier<Double> RAY_BLOOD_SATURATION;
 
     private AddonConfig() {
     }
 
     static {
-        ModConfigSpec.Builder builder = new ModConfigSpec.Builder();
+        ConfigSpecBuilder builder = PlatformConfigSpecBuilder.create();
 
         builder.comment("Blood spell integration settings").push("blood_spells");
 

@@ -28,6 +28,7 @@ public final class VampirismBridge {
             "de.teamlapen.vampirism.api.entity.vampire.IVampire";
     private static final String DRINK_BLOOD_CONTEXT =
             "de.teamlapen.vampirism.api.entity.player.vampire.IDrinkBloodContext";
+    private static final String LAZY_OPTIONAL = "net.minecraftforge.common.util.LazyOptional";
 
     private static final Object RESOLUTION_LOCK = new Object();
     private static final AtomicBoolean DIAGNOSTIC_REPORTED = new AtomicBoolean();
@@ -75,7 +76,7 @@ public final class VampirismBridge {
 
         Contracts resolved = contracts;
         try {
-            Object handle = resolved.vampirePlayer().invoke(null, player);
+            Object handle = resolved.playerLookup().find(player);
             if (handle == null || !resolved.vampirePlayerType().isInstance(handle)) {
                 return NOT_VAMPIRE;
             }
@@ -291,7 +292,7 @@ public final class VampirismBridge {
             Class<?> bloodStatsType,
             Class<?> vampireEntityType,
             Class<?> drinkContextType,
-            Method vampirePlayer,
+            PlayerLookup playerLookup,
             Method getLevel,
             Method getBloodLevel,
             Method getBloodStats,
@@ -318,8 +319,7 @@ public final class VampirismBridge {
                 );
             }
 
-            Method vampirePlayer = requireMethod(apiType, "vampirePlayer", vampirePlayerType, Player.class);
-            requireStatic(vampirePlayer);
+            PlayerLookup playerLookup = resolvePlayerLookup(apiType, vampirePlayerType);
 
             Method getLevel = requireMethod(vampirePlayerType, "getLevel", int.class);
             Method getBloodLevel = requireMethod(vampirePlayerType, "getBloodLevel", int.class);
@@ -353,7 +353,7 @@ public final class VampirismBridge {
                     bloodStatsType,
                     vampireEntityType,
                     drinkContextType,
-                    vampirePlayer,
+                    playerLookup,
                     getLevel,
                     getBloodLevel,
                     getBloodStats,
@@ -365,6 +365,42 @@ public final class VampirismBridge {
                     getBlockState,
                     getBlockPos
             );
+        }
+
+        private static PlayerLookup resolvePlayerLookup(
+                Class<?> apiType,
+                Class<?> vampirePlayerType
+        ) throws ReflectiveOperationException {
+            NoSuchMethodException directLookupFailure;
+            try {
+                Method directLookup = requireMethod(
+                        apiType, "vampirePlayer", vampirePlayerType, Player.class
+                );
+                requireStatic(directLookup);
+                return new PlayerLookup(directLookup, null);
+            } catch (NoSuchMethodException failure) {
+                directLookupFailure = failure;
+            }
+
+            try {
+                Class<?> lazyOptionalType = Class.forName(
+                        LAZY_OPTIONAL,
+                        false,
+                        VampirismBridge.class.getClassLoader()
+                );
+                Method legacyLookup = requireMethod(
+                        apiType, "getVampirePlayer", lazyOptionalType, Player.class
+                );
+                requireStatic(legacyLookup);
+                Method resolveOptional = requireMethod(
+                        lazyOptionalType, "resolve", Optional.class
+                );
+                requireInstance(resolveOptional);
+                return new PlayerLookup(legacyLookup, resolveOptional);
+            } catch (ReflectiveOperationException legacyFailure) {
+                legacyFailure.addSuppressed(directLookupFailure);
+                throw legacyFailure;
+            }
         }
 
         private static Class<?> requireInterface(String className) throws ReflectiveOperationException {
@@ -409,6 +445,29 @@ public final class VampirismBridge {
             if (!Modifier.isStatic(method.getModifiers())) {
                 throw new ReflectiveOperationException(method.toGenericString() + " is no longer static");
             }
+        }
+    }
+
+    private record PlayerLookup(Method apiMethod, Method resolveOptional) {
+
+        private Object find(Player player) throws ReflectiveOperationException {
+            Object result = apiMethod.invoke(null, player);
+            if (resolveOptional == null) {
+                return result;
+            }
+            if (result == null || !resolveOptional.getDeclaringClass().isInstance(result)) {
+                throw new ReflectiveOperationException(
+                        apiMethod.toGenericString() + " returned an incompatible LazyOptional"
+                );
+            }
+
+            Object resolved = resolveOptional.invoke(result);
+            if (resolved instanceof Optional<?> optional) {
+                return optional.orElse(null);
+            }
+            throw new ReflectiveOperationException(
+                    resolveOptional.toGenericString() + " returned an incompatible value"
+            );
         }
     }
 

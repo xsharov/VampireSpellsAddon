@@ -1,0 +1,13 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.vampirespells.addon.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "mixins": [
+    "CastSourceInvoker",
+    "AbstractSpellMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

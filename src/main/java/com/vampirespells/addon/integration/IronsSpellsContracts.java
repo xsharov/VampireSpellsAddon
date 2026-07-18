@@ -4,8 +4,6 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
-import net.neoforged.neoforge.event.entity.living.LivingEvent;
-import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -25,8 +23,11 @@ record Contracts(
     private static final String API = "io.redspace.ironsspellbooks.api.";
     private static final String EVENTS = API + "events.";
     private static final String SPELLS = API + "spells.";
+    private static final String NEOFORGE_EVENTS = "net.neoforged.neoforge.event.entity.";
+    private static final String FORGE_EVENTS = "net.minecraftforge.event.entity.";
 
     static Contracts resolve() throws ReflectiveOperationException {
+        EventBases eventBases = resolveEventBases();
         Class<?> schoolType = requireType(SPELLS + "SchoolType");
         Class<?> castSourceType = requireType(SPELLS + "CastSource");
         Class<?> abstractSpell = requireType(SPELLS + "AbstractSpell");
@@ -46,11 +47,11 @@ record Contracts(
         );
 
         return new Contracts(
-                resolvePre(schoolType, castSourceType),
-                resolveOnCast(schoolType, castSourceType),
+                resolvePre(eventBases.player(), schoolType, castSourceType),
+                resolveOnCast(eventBases.player(), schoolType, castSourceType),
                 resolveCooldown(abstractSpell),
-                resolveDamage(damageSource),
-                resolveHeal(schoolType),
+                resolveDamage(eventBases.living(), damageSource),
+                resolveHeal(eventBases.living(), schoolType),
                 new Spell(
                         abstractSpell,
                         schoolType,
@@ -74,10 +75,10 @@ record Contracts(
         );
     }
 
-    private static Pre resolvePre(Class<?> school, Class<?> source)
+    private static Pre resolvePre(Class<?> playerEvent, Class<?> school, Class<?> source)
             throws ReflectiveOperationException {
         Class<?> type = requireType(EVENTS + "SpellPreCastEvent");
-        requireAssignable(PlayerEvent.class, type);
+        requireAssignable(playerEvent, type);
         return new Pre(
                 type,
                 requireMethod(type, "getSpellId", String.class),
@@ -89,10 +90,10 @@ record Contracts(
         );
     }
 
-    private static OnCast resolveOnCast(Class<?> school, Class<?> source)
+    private static OnCast resolveOnCast(Class<?> playerEvent, Class<?> school, Class<?> source)
             throws ReflectiveOperationException {
         Class<?> type = requireType(EVENTS + "SpellOnCastEvent");
-        requireAssignable(PlayerEvent.class, type);
+        requireAssignable(playerEvent, type);
         return new OnCast(
                 type,
                 requireMethod(type, "getSpellId", String.class),
@@ -115,9 +116,10 @@ record Contracts(
         );
     }
 
-    private static Damage resolveDamage(Class<?> source) throws ReflectiveOperationException {
+    private static Damage resolveDamage(Class<?> livingEvent, Class<?> source)
+            throws ReflectiveOperationException {
         Class<?> type = requireType(EVENTS + "SpellDamageEvent");
-        requireAssignable(LivingEvent.class, type);
+        requireAssignable(livingEvent, type);
         return new Damage(
                 type,
                 requireMethod(type, "getAmount", float.class),
@@ -127,9 +129,10 @@ record Contracts(
         );
     }
 
-    private static Heal resolveHeal(Class<?> school) throws ReflectiveOperationException {
+    private static Heal resolveHeal(Class<?> livingEvent, Class<?> school)
+            throws ReflectiveOperationException {
         Class<?> type = requireType(EVENTS + "SpellHealEvent");
-        requireAssignable(LivingEvent.class, type);
+        requireAssignable(livingEvent, type);
         return new Heal(
                 type,
                 requireMethod(type, "getHealAmount", float.class),
@@ -175,6 +178,32 @@ record Contracts(
             Method forEntity, Method mana, Method resetAdditionalCastData,
             Method playerRecasts, Method hasRecast
     ) {
+    }
+
+    private record EventBases(Class<?> living, Class<?> player) {
+    }
+
+    private static EventBases resolveEventBases() throws ReflectiveOperationException {
+        ReflectiveOperationException neoForgeFailure;
+        try {
+            return resolveEventBases(NEOFORGE_EVENTS);
+        } catch (ReflectiveOperationException failure) {
+            neoForgeFailure = failure;
+        }
+
+        try {
+            return resolveEventBases(FORGE_EVENTS);
+        } catch (ReflectiveOperationException forgeFailure) {
+            forgeFailure.addSuppressed(neoForgeFailure);
+            throw forgeFailure;
+        }
+    }
+
+    private static EventBases resolveEventBases(String root) throws ReflectiveOperationException {
+        Class<?> living = requireType(root + "living.LivingEvent");
+        Class<?> player = requireType(root + "player.PlayerEvent");
+        requireAssignable(living, player);
+        return new EventBases(living, player);
     }
 
     private static Class<?> requireType(String name) throws ReflectiveOperationException {

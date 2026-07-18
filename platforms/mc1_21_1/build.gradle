@@ -1,0 +1,68 @@
+plugins {
+    id 'java-library'
+    id 'idea'
+    id 'net.neoforged.gradle.userdev' version '7.0.182'
+}
+
+def targetProperties = new Properties()
+rootProject.file('gradle/targets/mc1_21_1.properties').withInputStream(targetProperties.&load)
+targetProperties.each { key, defaultValue ->
+    ext.set(key.toString(), providers.gradleProperty(key.toString()).getOrElse(defaultValue.toString()))
+}
+
+ext.archive_loader = 'neoforge'
+ext.metadata_path = 'META-INF/neoforge.mods.toml'
+ext.platform_loader_mod_id = 'neoforge'
+ext.platform_version_range = neo_version_range
+ext.parent_runtime_configuration = 'localRuntime'
+
+apply from: rootProject.file('gradle/platform-conventions.gradle')
+
+runs {
+    configureEach {
+        systemProperty 'forge.logging.markers', 'REGISTRIES'
+        systemProperty 'forge.logging.console.level', 'debug'
+        modSource project.sourceSets.main
+    }
+
+    client {
+        workingDirectory project.file('runs/client')
+        systemProperty 'neoforge.enabledGameTestNamespaces', rootProject.mod_id
+    }
+
+    server {
+        workingDirectory project.file('runs/server')
+        systemProperty 'neoforge.enabledGameTestNamespaces', rootProject.mod_id
+        arguments.add '--nogui'
+    }
+
+    gameTestServer {
+        workingDirectory project.file('runs/gameTestServer')
+        systemProperty 'neoforge.enabledGameTestNamespaces', rootProject.mod_id
+    }
+
+    data {
+        workingDirectory project.file('runs/data')
+        arguments.addAll '--mod', rootProject.mod_id, '--all',
+                '--output', layout.buildDirectory.dir('generated/resources').get().asFile.absolutePath,
+                '--existing', rootProject.file('src/main/resources').absolutePath
+    }
+}
+
+configurations {
+    runtimeClasspath.extendsFrom localRuntime
+}
+
+dependencies {
+    implementation "net.neoforged:neoforge:${neo_version}"
+
+    localRuntime "io.redspace:irons_spellbooks:${irons_spells_runtime_version}"
+    localRuntime("de.teamlapen.vampirism:Vampirism:${vampirism_runtime_version}") {
+        exclude group: 'mezz.jei'
+    }
+    localRuntime "software.bernie.geckolib:geckolib-neoforge-${minecraft_version}:${geckolib_version}"
+    localRuntime "dev.kosmx.player-anim:player-animation-lib-forge:${player_animator_version}"
+    localRuntime "top.theillusivec4.curios:curios-neoforge:${curios_version}+${minecraft_version}"
+    localRuntime "io.redspace:irons_lib:${irons_lib_version}"
+    localRuntime "mezz.jei:jei-${jei_mc_version}-neoforge:${jei_version}"
+}

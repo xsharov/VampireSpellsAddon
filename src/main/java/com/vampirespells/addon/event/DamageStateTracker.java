@@ -2,7 +2,6 @@ package com.vampirespells.addon.event;
 
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.LivingEntity;
-import net.neoforged.neoforge.event.entity.living.LivingDamageEvent;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -12,18 +11,18 @@ final class DamageStateTracker {
 
     private final ThreadLocal<Deque<DamageSnapshot>> snapshots = ThreadLocal.withInitial(ArrayDeque::new);
 
-    void capture(LivingDamageEvent.Pre event) {
-        snapshots.get().push(new DamageSnapshot(event.getEntity(), event.getSource(), event.getEntity().getHealth()));
+    void capture(LivingEntity entity, DamageSource source) {
+        snapshots.get().push(new DamageSnapshot(entity, source, entity.getHealth()));
     }
 
-    float finish(LivingDamageEvent.Post event) {
+    float finish(LivingEntity entity, DamageSource source, float deliveredDamage) {
         Deque<DamageSnapshot> stack = snapshots.get();
-        DamageSnapshot match = removeMatching(stack, event.getEntity(), event.getSource());
+        DamageSnapshot match = removeMatching(stack, entity, source);
         if (stack.isEmpty()) {
             snapshots.remove();
         }
 
-        float postDamage = finitePositive(event.getNewDamage());
+        float postDamage = finitePositive(deliveredDamage);
         if (match == null) {
             return postDamage;
         }

@@ -4,6 +4,7 @@
   "package": "com.vampirespells.addon.mixin",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
+    "CastSourceInvoker",
     "AbstractSpellMixin"
   ],
   "injectors": {

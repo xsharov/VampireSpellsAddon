@@ -1,0 +1,304 @@
+import java.util.jar.Manifest
+import java.util.zip.ZipFile
+
+def canonicalVersion = rootProject.property('mod_version').toString()
+def canonicalMatch = canonicalVersion =~ /^1\.21\.1-([0-9]+\.[0-9]+\.[0-9]+)$/
+if (!canonicalMatch.matches()) {
+    throw new GradleException(
+            "mod_version must use the canonical 1.21.1-X.Y.Z release line: ${canonicalVersion}"
+    )
+}
+
+ext.release_version = canonicalMatch.group(1)
+version = "${minecraft_version}-${release_version}"
+group = rootProject.property('mod_group_id')
+
+base {
+    archivesName = "${rootProject.property('mod_id')}-${archive_loader}"
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(java_version.toString().toInteger())
+
+def sharedMainJava = rootProject.file('src/main/java')
+def sharedMainResources = rootProject.file('src/main/resources')
+def sharedTestJava = rootProject.file('src/test/java')
+def generatedResources = layout.buildDirectory.dir('generated/resources')
+
+sourceSets {
+    main {
+        java.srcDir sharedMainJava
+        resources.srcDir sharedMainResources
+        resources.srcDir generatedResources
+    }
+    test {
+        java.srcDir sharedTestJava
+    }
+}
+
+repositories {
+    mavenCentral()
+    maven { url = 'https://maven.maxanier.de/releases' }
+    maven { url = 'https://code.redspace.io/releases' }
+    maven { url = 'https://code.redspace.io/snapshots' }
+    maven { url = 'https://modmaven.dev' }
+    maven { url = 'https://maven.minecraftforge.net' }
+    maven { url = 'https://maven.enginehub.org/repo/' }
+    maven {
+        url = 'https://dl.cloudsmith.io/public/geckolib3/geckolib/maven/'
+        content {
+            includeGroup 'software.bernie.geckolib'
+        }
+    }
+    maven { url = 'https://maven.theillusivec4.top' }
+    maven { url = 'https://cursemaven.com' }
+    maven { url = 'https://maven.blamejared.com' }
+    maven { url = 'https://maven.kosmx.dev/' }
+}
+
+dependencies {
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+def replaceProperties = [
+        minecraft_version          : minecraft_version,
+        minecraft_version_range    : minecraft_version_range,
+        platform_loader_mod_id     : platform_loader_mod_id,
+        platform_version_range     : platform_version_range,
+        loader_version_range       : loader_version_range,
+        mod_id                     : rootProject.property('mod_id'),
+        mod_name                   : rootProject.property('mod_name'),
+        mod_version                : project.version,
+        mod_license                : rootProject.property('mod_license'),
+        mod_authors                : rootProject.property('mod_authors'),
+        mod_credits                : rootProject.property('mod_credits'),
+        mod_description            : rootProject.property('mod_description'),
+        mod_display_url            : rootProject.property('mod_display_url'),
+        mod_issue_tracker          : rootProject.property('mod_issue_tracker'),
+        vampirism_version          : vampirism_version,
+        vampirism_version_range    : vampirism_version_range,
+        irons_spells_version       : irons_spells_version,
+        irons_spells_version_range : irons_spells_version_range
+]
+
+tasks.withType(ProcessResources).configureEach {
+    inputs.properties replaceProperties
+    filesMatching([metadata_path]) {
+        expand replaceProperties
+    }
+}
+
+tasks.named('jar', Jar) {
+    from(rootProject.file('LICENSE')) {
+        into 'META-INF'
+        rename { "LICENSE_${rootProject.property('mod_id')}" }
+    }
+
+    manifest {
+        attributes([
+                'Specification-Title'    : rootProject.property('mod_name'),
+                'Specification-Vendor'   : rootProject.property('mod_authors'),
+                'Specification-Version'  : '1',
+                'Implementation-Title'   : project.name,
+                'Implementation-Version' : archiveVersion.get(),
+                'Implementation-Vendor'  : rootProject.property('mod_authors'),
+                'MixinConfigs'           : 'vampire_spells_addon.core.mixins.json,vampire_spells_addon.client.mixins.json'
+        ])
+    }
+}
+
+tasks.withType(AbstractArchiveTask).configureEach {
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+tasks.withType(Test).configureEach {
+    useJUnitPlatform()
+    workingDir rootProject.projectDir
+}
+
+java {
+    withSourcesJar()
+}
+
+def runtimeConfiguration = configurations.named(parent_runtime_configuration)
+tasks.register('resolveParentRuntime') {
+    group = 'verification'
+    description = "Resolves parent mods used by the ${minecraft_version} development runtime."
+
+    doLast {
+        Set<File> resolved = runtimeConfiguration.get().resolve()
+        logger.lifecycle("Resolved ${resolved.size()} parent runtime artifacts for Minecraft ${minecraft_version}.")
+        resolved.toSorted { left, right -> left.name <=> right.name }
+                .each { file -> logger.lifecycle(" - ${file.name}") }
+    }
+}
+
+def gameTestServerDirectory = file('runs/gameTestServer')
+def gameTestServerLog = new File(gameTestServerDirectory, 'logs/latest.log')
+def verifyGameTestServerLog = tasks.register('verifyGameTestServerLog') {
+    group = 'verification'
+    description = 'Fails when the development server did not validate all reflective parent-mod contracts.'
+    outputs.upToDateWhen { false }
+
+    doLast {
+        if (!gameTestServerLog.isFile()) {
+            throw new GradleException("GameTest server did not create ${gameTestServerLog}")
+        }
+
+        String logText = gameTestServerLog.getText('UTF-8')
+        String successMarker = "Vampirism and Iron's Spells integration contracts validated successfully"
+        if (!logText.contains(successMarker)) {
+            throw new GradleException(
+                    "GameTest server did not validate the addon integration contracts. See ${gameTestServerLog}"
+            )
+        }
+    }
+}
+
+tasks.matching { it.name == 'runGameTestServer' }.configureEach {
+    doFirst {
+        project.delete(gameTestServerDirectory)
+        if (gameTestServerDirectory.exists()) {
+            throw new GradleException(
+                    "Could not reset disposable GameTest server directory ${gameTestServerDirectory}"
+            )
+        }
+        if (!gameTestServerDirectory.mkdirs() && !gameTestServerDirectory.isDirectory()) {
+            throw new GradleException(
+                    "Could not create GameTest server directory ${gameTestServerDirectory}"
+            )
+        }
+    }
+    finalizedBy verifyGameTestServerLog
+}
+
+verifyGameTestServerLog.configure {
+    mustRunAfter 'runGameTestServer'
+}
+
+def jarTask = tasks.named('jar', Jar)
+def verifyDependencies = [jarTask]
+if (tasks.findByName('reobfJar') != null) {
+    verifyDependencies.add(tasks.named('reobfJar'))
+}
+
+def verifyJarContents = tasks.register('verifyJarContents') {
+    group = 'verification'
+    description = 'Checks ownership, metadata, target bytecode and identity of the distributable JAR.'
+    dependsOn verifyDependencies
+    inputs.file(jarTask.flatMap { it.archiveFile })
+
+    doLast {
+        File archive = jarTask.get().archiveFile.get().asFile
+
+        new ZipFile(archive).withCloseable { zip ->
+            List<String> names = Collections.list(zip.entries())*.name
+            List<String> forbidden = names.findAll { name ->
+                name.startsWith('io/redspace/') ||
+                        name.startsWith('de/teamlapen/') ||
+                        name.startsWith('net/minecraft/') ||
+                        name.startsWith('net/minecraftforge/') ||
+                        name.startsWith('net/neoforged/')
+            }
+            if (!forbidden.isEmpty()) {
+                throw new GradleException("Foreign classes were bundled into ${archive.name}: ${forbidden}")
+            }
+
+            def metadata = zip.getEntry(metadata_path)
+            if (metadata == null) {
+                throw new GradleException("Missing ${metadata_path} in ${archive.name}")
+            }
+            String metadataText = zip.getInputStream(metadata).getText('UTF-8')
+            if (metadataText.contains('${')) {
+                throw new GradleException("Unexpanded placeholders remain in ${archive.name}")
+            }
+            if (!metadataText.contains("modId = \"${rootProject.property('mod_id')}\"")) {
+                throw new GradleException("Expected addon mod id is missing from ${archive.name}")
+            }
+            [minecraft_version_range, platform_version_range,
+             vampirism_version_range, irons_spells_version_range].each { expectedRange ->
+                if (!metadataText.contains("versionRange = \"${expectedRange}\"")) {
+                    throw new GradleException("Dependency range ${expectedRange} is missing from ${archive.name}")
+                }
+            }
+
+            String expectedVersion = project.version.toString()
+            def modVersionMatch = metadataText =~ /(?m)^version\s*=\s*"([^"]+)"\s*$/
+            if (!modVersionMatch.find() || modVersionMatch.group(1) != expectedVersion) {
+                throw new GradleException("Mod metadata version does not match ${expectedVersion} in ${archive.name}")
+            }
+
+            def manifestEntry = zip.getEntry('META-INF/MANIFEST.MF')
+            if (manifestEntry == null) {
+                throw new GradleException("Missing META-INF/MANIFEST.MF in ${archive.name}")
+            }
+            Manifest manifest = new Manifest(zip.getInputStream(manifestEntry))
+            String implementationVersion = manifest.mainAttributes.getValue('Implementation-Version')
+            if (implementationVersion != expectedVersion) {
+                throw new GradleException("Manifest version ${implementationVersion} does not match ${expectedVersion}")
+            }
+
+            String expectedArchiveName = "${base.archivesName.get()}-${expectedVersion}.jar"
+            if (archive.name != expectedArchiveName) {
+                throw new GradleException("Unexpected main JAR ${archive.name}; expected ${expectedArchiveName}")
+            }
+
+            int expectedMajor = class_file_major.toString().toInteger()
+            names.findAll { it.startsWith('com/vampirespells/addon/') && it.endsWith('.class') }
+                    .each { className ->
+                        byte[] header = zip.getInputStream(zip.getEntry(className)).readNBytes(8)
+                        if (header.length != 8) {
+                            throw new GradleException("Truncated class ${className} in ${archive.name}")
+                        }
+                        int actualMajor = ((header[6] & 0xff) << 8) | (header[7] & 0xff)
+                        if (actualMajor != expectedMajor) {
+                            throw new GradleException(
+                                    "Class ${className} uses major ${actualMajor}; expected ${expectedMajor}"
+                            )
+                        }
+                    }
+
+            if (zip.getEntry("META-INF/LICENSE_${rootProject.property('mod_id')}") == null) {
+                throw new GradleException("Packaged license is missing from ${archive.name}")
+            }
+            ['vampire_spells_addon.core.mixins.json',
+             'vampire_spells_addon.client.mixins.json'].each { mixinConfig ->
+                if (zip.getEntry(mixinConfig) == null) {
+                    throw new GradleException("Packaged mixin config ${mixinConfig} is missing from ${archive.name}")
+                }
+            }
+
+            Set<String> expectedRayLocales = [
+                    'en_us', 'es_es', 'es_mx', 'fr_fr', 'it_it',
+                    'ja_jp', 'ko_kr', 'pl_pl', 'pt_br', 'ru_ru',
+                    'uk_ua', 'vi_vn', 'zh_cn', 'zh_hk', 'zh_tw'
+            ] as Set
+            Set<String> packagedRayLocales = names.findAll { name ->
+                name.startsWith('assets/irons_spellbooks/lang/') && name.endsWith('.json')
+            }.collect { name ->
+                name.substring('assets/irons_spellbooks/lang/'.length(), name.length() - '.json'.length())
+            } as Set
+            if (packagedRayLocales != expectedRayLocales) {
+                throw new GradleException(
+                        "Packaged Ray locales ${packagedRayLocales.sort()} do not match ${expectedRayLocales.sort()}"
+                )
+            }
+        }
+    }
+}
+
+tasks.named('check') {
+    dependsOn verifyJarContents
+}
+
+idea {
+    module {
+        downloadSources = true
+        downloadJavadoc = true
+    }
+}

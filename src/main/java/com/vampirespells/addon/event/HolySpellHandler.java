@@ -7,7 +7,6 @@ import com.vampirespells.addon.mechanics.SpellIds;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
-import net.neoforged.neoforge.event.entity.living.LivingHealEvent;
 
 final class HolySpellHandler {
 
@@ -94,16 +93,13 @@ final class HolySpellHandler {
         }
     }
 
-    void onLivingHeal(LivingHealEvent event) {
-        LivingEntity target = event.getEntity();
+    boolean shouldSuppressLivingHeal(LivingEntity target, float amount) {
         if (!isServerEntity(target)) {
-            return;
+            return false;
         }
 
         int serverTick = target.getServer() == null ? target.tickCount : target.getServer().getTickCount();
-        if (state.consumeMatchingHolyHeal(target, event.getAmount(), serverTick)) {
-            event.setCanceled(true);
-        }
+        return state.consumeMatchingHolyHeal(target, amount, serverTick);
     }
 
     private static void doubleNpcHolyDamage(Object event, LivingEntity target) {

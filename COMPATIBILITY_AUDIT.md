@@ -239,11 +239,11 @@ versions on a client and a dedicated server. Cover at least:
 The repository verification sequence is:
 
 ```bash
-./gradlew test
-./gradlew compileJava processResources
-./gradlew resolveParentRuntime
-./gradlew --no-daemon clean build
-jar --list --file build/libs/vampire_spells_addon-neoforge-*.jar
+./gradlew :platforms:mc1_21_1:test
+./gradlew :platforms:mc1_21_1:compileJava :platforms:mc1_21_1:processResources
+./gradlew :platforms:mc1_21_1:resolveParentRuntime
+./gradlew --no-daemon :platforms:mc1_21_1:clean :platforms:mc1_21_1:build
+jar --list --file platforms/mc1_21_1/build/libs/vampire_spells_addon-neoforge-*.jar
 ```
 
 ## Verification completed for this audit

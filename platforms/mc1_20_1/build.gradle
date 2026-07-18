@@ -1,0 +1,86 @@
+plugins {
+    id 'java-library'
+    id 'idea'
+    id 'net.minecraftforge.gradle' version '6.0.54'
+    id 'org.spongepowered.mixin' version '0.7.38'
+    id 'org.parchmentmc.librarian.forgegradle' version '1.2.0'
+}
+
+def targetProperties = new Properties()
+rootProject.file('gradle/targets/mc1_20_1.properties').withInputStream(targetProperties.&load)
+targetProperties.each { key, defaultValue ->
+    ext.set(key.toString(), providers.gradleProperty(key.toString()).getOrElse(defaultValue.toString()))
+}
+
+ext.archive_loader = 'forge'
+ext.metadata_path = 'META-INF/mods.toml'
+ext.platform_loader_mod_id = 'forge'
+ext.platform_version_range = forge_version_range
+ext.parent_runtime_configuration = 'parentRuntime'
+
+configurations {
+    parentRuntime
+    runtimeOnly.extendsFrom parentRuntime
+}
+
+apply from: rootProject.file('gradle/platform-conventions.gradle')
+
+minecraft {
+    mappings channel: mapping_channel, version: mapping_version
+    copyIdeResources = true
+
+    runs {
+        configureEach {
+            workingDirectory project.file("runs/${name}")
+            property 'forge.logging.markers', 'REGISTRIES'
+            property 'forge.logging.console.level', 'debug'
+            property 'forge.enabledGameTestNamespaces', rootProject.mod_id
+            mods {
+                "${rootProject.mod_id}" {
+                    source sourceSets.main
+                }
+            }
+        }
+
+        client {
+        }
+
+        server {
+            args '--nogui'
+        }
+
+        gameTestServer {
+        }
+
+        data {
+            args '--mod', rootProject.mod_id, '--all',
+                    '--output', layout.buildDirectory.dir('generated/resources').get().asFile.absolutePath,
+                    '--existing', rootProject.file('src/main/resources').absolutePath
+        }
+    }
+}
+
+mixin {
+    add sourceSets.main, "${rootProject.mod_id}.refmap.json"
+    config 'vampire_spells_addon.core.mixins.json'
+    config 'vampire_spells_addon.client.mixins.json'
+}
+
+dependencies {
+    minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+    annotationProcessor "org.spongepowered:mixin:${mixin_version}:processor"
+
+    parentRuntime fg.deobf("io.redspace:irons_spellbooks:${irons_spells_runtime_version}")
+    parentRuntime(fg.deobf("de.teamlapen.vampirism:Vampirism:${vampirism_runtime_version}")) {
+        exclude group: 'mezz.jei'
+    }
+    parentRuntime fg.deobf("software.bernie.geckolib:geckolib-forge-${minecraft_version}:${geckolib_version}")
+    parentRuntime fg.deobf("dev.kosmx.player-anim:player-animation-lib-forge:${player_animator_version}")
+    parentRuntime fg.deobf("top.theillusivec4.curios:curios-forge:${curios_version}")
+    parentRuntime fg.deobf("io.redspace:irons_lib:${irons_lib_version}")
+    parentRuntime fg.deobf("mezz.jei:jei-${jei_mc_version}-forge:${jei_version}")
+}
+
+tasks.named('jar') {
+    finalizedBy 'reobfJar'
+}
