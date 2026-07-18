@@ -23,6 +23,7 @@ jobs:
       contents: write
     outputs:
       version: ${{ steps.version.outputs.version }}
+      release_version: ${{ steps.version.outputs.release_version }}
       should_release: ${{ steps.version.outputs.should_release }}
 
     steps:
@@ -46,13 +47,12 @@ jobs:
           fi
 
           base_version="$(printf '%s\n' "$properties" | sed -n 's/^mod_version=//p' | tr -d '\r')"
-          version_prefix="${base_version%.*}"
-          base_patch="${base_version##*.}"
-
-          if [[ ! "$version_prefix" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ || ! "$base_patch" =~ ^[0-9]+$ ]]; then
-            echo "mod_version must use a safe prefix and end in a numeric patch: $base_version" >&2
+          if [[ ! "$base_version" =~ ^1\.21\.1-([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "mod_version must use the canonical 1.21.1-X.Y.Z release line: $base_version" >&2
             exit 1
           fi
+          version_prefix="1.21.1-${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+          base_patch="${BASH_REMATCH[3]}"
 
           highest_patch=$((10#$base_patch))
           release_marker='<!-- vampire-spells-addon-release-workflow -->'
@@ -329,18 +329,47 @@ jobs:
             exit 1
           fi
 
+          if [[ ! "$build_version" =~ ^1\.21\.1-([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "Reserved version is outside the canonical release line: $build_version" >&2
+            exit 1
+          fi
+          release_version="${BASH_REMATCH[1]}"
+
           echo "version=$build_version" >> "$GITHUB_OUTPUT"
+          echo "release_version=$release_version" >> "$GITHUB_OUTPUT"
           echo "should_release=true" >> "$GITHUB_OUTPUT"
           echo "Reserved release version $build_version"
 
   build:
-    name: Build release JAR
+    name: Build ${{ matrix.minecraft }} / ${{ matrix.loader }}
     needs: reserve
     if: needs.reserve.outputs.should_release == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - minecraft: 1.21.1
+            loader: NeoForge
+            java: "21"
+            project: :platforms:mc1_21_1
+            project_dir: platforms/mc1_21_1
+            artifact_loader: neoforge
+            floor_loader: neo_version=21.1.200
+            floor_vampirism: 1.21-1.10.7
+            floor_irons_spells: 1.21.1-3.14.3
+          - minecraft: 1.20.1
+            loader: Forge
+            java: "17"
+            project: :platforms:mc1_20_1
+            project_dir: platforms/mc1_20_1
+            artifact_loader: forge
+            floor_loader: forge_version=47.4.0
+            floor_vampirism: 1.20.1-1.10.7
+            floor_irons_spells: 1.20.1-3.15.0
 
     steps:
       - name: Check out sources
@@ -349,33 +378,46 @@ jobs:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           persist-credentials: false
 
-      - name: Set up Java 21
+      - name: Set up Java ${{ matrix.java }}
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: ${{ matrix.java }}
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
       - name: Build and verify
-        run: ./gradlew --no-daemon clean build resolveParentRuntime --stacktrace -Pmod_version="${{ needs.reserve.outputs.version }}"
+        run: >-
+          ./gradlew --no-daemon
+          "${{ matrix.project }}:clean"
+          "${{ matrix.project }}:build"
+          "${{ matrix.project }}:resolveParentRuntime"
+          --stacktrace
+          -Pmod_version="${{ needs.reserve.outputs.version }}"
 
       - name: Smoke-test current parent runtime
-        run: ./gradlew --no-daemon runGameTestServer --stacktrace -Pmod_version="${{ needs.reserve.outputs.version }}"
+        run: >-
+          ./gradlew --no-daemon
+          "${{ matrix.project }}:runGameTestServer"
+          --stacktrace
+          -Pmod_version="${{ needs.reserve.outputs.version }}"
 
       - name: Smoke-test parent compatibility floors
         run: >-
-          ./gradlew --no-daemon runGameTestServer --stacktrace
+          ./gradlew --no-daemon
+          "${{ matrix.project }}:runGameTestServer"
+          --stacktrace
           -Pmod_version="${{ needs.reserve.outputs.version }}"
-          -Pvampirism_runtime_version=1.21-1.10.7
-          -Pirons_spells_runtime_version=1.21.1-3.14.3
+          -P${{ matrix.floor_loader }}
+          -Pvampirism_runtime_version="${{ matrix.floor_vampirism }}"
+          -Pirons_spells_runtime_version="${{ matrix.floor_irons_spells }}"
 
       - name: Store release JAR for publishing
         uses: actions/upload-artifact@v7
         with:
-          name: vampire_spells_addon-neoforge-${{ needs.reserve.outputs.version }}.jar
-          path: build/libs/vampire_spells_addon-neoforge-${{ needs.reserve.outputs.version }}.jar
+          name: vampire_spells_addon-${{ matrix.artifact_loader }}-${{ matrix.minecraft }}-${{ needs.reserve.outputs.release_version }}.jar
+          path: ${{ matrix.project_dir }}/build/libs/vampire_spells_addon-${{ matrix.artifact_loader }}-${{ matrix.minecraft }}-${{ needs.reserve.outputs.release_version }}.jar
           if-no-files-found: error
           retention-days: 30
           overwrite: true
@@ -393,10 +435,16 @@ jobs:
       contents: write
 
     steps:
-      - name: Download verified release JAR
+      - name: Download verified NeoForge JAR
         uses: actions/download-artifact@v8
         with:
-          name: vampire_spells_addon-neoforge-${{ needs.reserve.outputs.version }}.jar
+          name: vampire_spells_addon-neoforge-1.21.1-${{ needs.reserve.outputs.release_version }}.jar
+          path: release
+
+      - name: Download verified Forge JAR
+        uses: actions/download-artifact@v8
+        with:
+          name: vampire_spells_addon-forge-1.20.1-${{ needs.reserve.outputs.release_version }}.jar
           path: release
 
       - name: Publish GitHub Release
@@ -405,19 +453,49 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           BUILD_VERSION: ${{ needs.reserve.outputs.version }}
+          RELEASE_VERSION: ${{ needs.reserve.outputs.release_version }}
           MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
         run: |
           set -euo pipefail
 
           release_tag="$BUILD_VERSION"
-          main_jar="release/vampire_spells_addon-neoforge-${BUILD_VERSION}.jar"
-          asset_name="$(basename "$main_jar")"
-
-          if [[ ! -f "$main_jar" ]]; then
-            echo "Expected main JAR was not produced: $main_jar" >&2
+          if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ || \
+                "$release_tag" != "1.21.1-${RELEASE_VERSION}" ]]; then
+            echo "Release version outputs disagree: $release_tag / $RELEASE_VERSION" >&2
             exit 1
           fi
-          expected_digest="sha256:$(sha256sum "$main_jar" | cut -d ' ' -f 1)"
+
+          expected_asset_names=(
+            "vampire_spells_addon-neoforge-1.21.1-${RELEASE_VERSION}.jar"
+            "vampire_spells_addon-forge-1.20.1-${RELEASE_VERSION}.jar"
+          )
+          declare -A expected_files=()
+          declare -A expected_digests=()
+          declare -A allowed_local_paths=()
+
+          for asset_name in "${expected_asset_names[@]}"; do
+            asset_path="release/${asset_name}"
+            expected_files["$asset_name"]="$asset_path"
+            allowed_local_paths["$asset_path"]=true
+            if [[ ! -f "$asset_path" ]]; then
+              echo "Expected release JAR was not downloaded: $asset_path" >&2
+              exit 1
+            fi
+            expected_digests["$asset_name"]="sha256:$(sha256sum "$asset_path" | cut -d ' ' -f 1)"
+          done
+
+          mapfile -t downloaded_files < <(find release -type f -print | sort)
+          if (( ${#downloaded_files[@]} != ${#expected_asset_names[@]} )); then
+            echo "Expected exactly ${#expected_asset_names[@]} downloaded release files, found ${#downloaded_files[@]}" >&2
+            printf '  %s\n' "${downloaded_files[@]}" >&2
+            exit 1
+          fi
+          for downloaded_file in "${downloaded_files[@]}"; do
+            if [[ -z "${allowed_local_paths[$downloaded_file]+present}" ]]; then
+              echo "Unexpected downloaded release file: $downloaded_file" >&2
+              exit 1
+            fi
+          done
 
           resolve_tag_sha() {
             local requested_tag="$1"
@@ -458,6 +536,7 @@ jobs:
           }
 
           read_asset() {
+            local wanted_name="$1"
             local rows tag_name name state digest found=""
             if ! rows="$(
               gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
@@ -466,14 +545,37 @@ jobs:
               return 1
             fi
             while IFS=$'\t' read -r tag_name name state digest; do
-              [[ "$tag_name" == "$release_tag" && "$name" == "$asset_name" ]] || continue
+              [[ "$tag_name" == "$release_tag" && "$name" == "$wanted_name" ]] || continue
               if [[ -n "$found" ]]; then
-                echo "Release $release_tag contains duplicate assets named $asset_name" >&2
+                echo "Release $release_tag contains duplicate assets named $wanted_name" >&2
                 return 1
               fi
               found="${state}"$'\t'"${digest}"
             done <<< "$rows"
             printf '%s' "$found"
+          }
+
+          validate_release_asset_allowlist() {
+            local rows tag_name name state digest
+            local -A seen=()
+            if ! rows="$(
+              gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+                --jq '.[] | .tag_name as $tag | .assets[] | [$tag, .name, .state, (.digest // "")] | @tsv'
+            )"; then
+              return 1
+            fi
+            while IFS=$'\t' read -r tag_name name state digest; do
+              [[ "$tag_name" == "$release_tag" ]] || continue
+              if [[ -z "${expected_files[$name]+present}" ]]; then
+                echo "Release $release_tag contains unexpected asset $name" >&2
+                return 1
+              fi
+              if [[ -n "${seen[$name]+present}" ]]; then
+                echo "Release $release_tag contains duplicate assets named $name" >&2
+                return 1
+              fi
+              seen["$name"]=true
+            done <<< "$rows"
           }
 
           read_release() {
@@ -517,55 +619,81 @@ jobs:
             echo "Published release $release_tag exists without its Git tag" >&2
             exit 1
           fi
-          if [[ -z "$tag_sha" && "$release_target" != "$MERGE_SHA" ]]; then
+          if [[ "$release_is_draft" == "true" && "$release_target" != "$MERGE_SHA" ]]; then
             echo "Draft release $release_tag targets $release_target instead of $MERGE_SHA" >&2
             exit 1
           fi
 
-          asset_info="$(read_asset)"
-          IFS=$'\t' read -r asset_state asset_digest <<< "$asset_info"
-          if [[ -n "$asset_state" && ( "$asset_state" != "uploaded" || "$asset_digest" != "$expected_digest" ) ]]; then
-            if [[ "$release_is_draft" != "true" ]]; then
-              echo "Published release $release_tag contains an invalid $asset_name" >&2
-              exit 1
-            fi
-            gh release delete-asset "$release_tag" "$asset_name" --yes
-            for attempt in 1 2 3 4 5 6; do
-              asset_info="$(read_asset)"
+          validate_release_asset_allowlist
+
+          for asset_name in "${expected_asset_names[@]}"; do
+            asset_path="${expected_files[$asset_name]}"
+            expected_digest="${expected_digests[$asset_name]}"
+            asset_info="$(read_asset "$asset_name")"
+            asset_state=""
+            asset_digest=""
+            if [[ -n "$asset_info" ]]; then
               IFS=$'\t' read -r asset_state asset_digest <<< "$asset_info"
-              if [[ -z "$asset_state" ]]; then
+            fi
+
+            if [[ -n "$asset_state" && \
+                  ( "$asset_state" != "uploaded" || "$asset_digest" != "$expected_digest" ) ]]; then
+              if [[ "$release_is_draft" != "true" ]]; then
+                echo "Published release $release_tag contains an invalid $asset_name" >&2
+                exit 1
+              fi
+              gh release delete-asset "$release_tag" "$asset_name" --yes
+              for attempt in 1 2 3 4 5 6; do
+                asset_info="$(read_asset "$asset_name")"
+                asset_state=""
+                asset_digest=""
+                if [[ -n "$asset_info" ]]; then
+                  IFS=$'\t' read -r asset_state asset_digest <<< "$asset_info"
+                fi
+                if [[ -z "$asset_state" ]]; then
+                  break
+                fi
+                if (( attempt < 6 )); then
+                  sleep 2
+                fi
+              done
+              if [[ -n "$asset_state" ]]; then
+                echo "Deleted release asset $asset_name is still visible" >&2
+                exit 1
+              fi
+            fi
+
+            if [[ -z "$asset_state" ]]; then
+              if [[ "$release_is_draft" != "true" ]]; then
+                echo "Published release $release_tag is missing $asset_name" >&2
+                exit 1
+              fi
+              gh release upload "$release_tag" "$asset_path"
+            else
+              echo "Release $release_tag already contains the verified $asset_name"
+            fi
+
+            for attempt in 1 2 3 4 5 6; do
+              asset_info="$(read_asset "$asset_name")"
+              asset_state=""
+              asset_digest=""
+              if [[ -n "$asset_info" ]]; then
+                IFS=$'\t' read -r asset_state asset_digest <<< "$asset_info"
+              fi
+              if [[ "$asset_state" == "uploaded" && "$asset_digest" == "$expected_digest" ]]; then
                 break
               fi
               if (( attempt < 6 )); then
                 sleep 2
               fi
             done
-            if [[ -n "$asset_state" ]]; then
-              echo "Deleted release asset $asset_name is still visible" >&2
+            if [[ "$asset_state" != "uploaded" || "$asset_digest" != "$expected_digest" ]]; then
+              echo "Release asset verification failed for $asset_name" >&2
               exit 1
             fi
-          fi
-
-          if [[ -z "$asset_state" ]]; then
-            gh release upload "$release_tag" "$main_jar"
-          else
-            echo "Release $release_tag already contains the verified $asset_name"
-          fi
-
-          for attempt in 1 2 3 4 5 6; do
-            asset_info="$(read_asset)"
-            IFS=$'\t' read -r asset_state asset_digest <<< "$asset_info"
-            if [[ "$asset_state" == "uploaded" && "$asset_digest" == "$expected_digest" ]]; then
-              break
-            fi
-            if (( attempt < 6 )); then
-              sleep 2
-            fi
           done
-          if [[ "$asset_state" != "uploaded" || "$asset_digest" != "$expected_digest" ]]; then
-            echo "Release asset verification failed for $asset_name" >&2
-            exit 1
-          fi
+
+          validate_release_asset_allowlist
 
           if [[ "$release_is_draft" == "true" ]]; then
             gh release edit "$release_tag" --draft=false --latest
@@ -588,3 +716,18 @@ jobs:
             echo "Published tag $release_tag points to $tag_sha instead of $MERGE_SHA" >&2
             exit 1
           fi
+
+          validate_release_asset_allowlist
+          for asset_name in "${expected_asset_names[@]}"; do
+            asset_info="$(read_asset "$asset_name")"
+            asset_state=""
+            asset_digest=""
+            if [[ -n "$asset_info" ]]; then
+              IFS=$'\t' read -r asset_state asset_digest <<< "$asset_info"
+            fi
+            if [[ "$asset_state" != "uploaded" || \
+                  "$asset_digest" != "${expected_digests[$asset_name]}" ]]; then
+              echo "Published release asset verification failed for $asset_name" >&2
+              exit 1
+            fi
+          done
