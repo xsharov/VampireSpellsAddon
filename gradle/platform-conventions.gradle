@@ -1,3 +1,4 @@
+import groovy.json.JsonSlurper
 import java.util.jar.Manifest
 import java.util.zip.ZipFile
 
@@ -80,10 +81,13 @@ def replaceProperties = [
         irons_spells_version       : irons_spells_version,
         irons_spells_version_range : irons_spells_version_range
 ]
+if (project.hasProperty('resource_pack_format')) {
+    replaceProperties.resource_pack_format = project.property('resource_pack_format')
+}
 
 tasks.withType(ProcessResources).configureEach {
     inputs.properties replaceProperties
-    filesMatching([metadata_path]) {
+    filesMatching([metadata_path, 'pack.mcmeta']) {
         expand replaceProperties
     }
 }
@@ -231,6 +235,44 @@ def verifyJarContents = tasks.register('verifyJarContents') {
             def modVersionMatch = metadataText =~ /(?m)^version\s*=\s*"([^"]+)"\s*$/
             if (!modVersionMatch.find() || modVersionMatch.group(1) != expectedVersion) {
                 throw new GradleException("Mod metadata version does not match ${expectedVersion} in ${archive.name}")
+            }
+
+            if (project.hasProperty('resource_pack_format')) {
+                List<String> packMetadataEntries = names.findAll { it == 'pack.mcmeta' }
+                if (packMetadataEntries.size() != 1) {
+                    throw new GradleException(
+                            "Expected exactly one root pack.mcmeta in ${archive.name}; found ${packMetadataEntries.size()}"
+                    )
+                }
+
+                String packMetadataText = zip.getInputStream(zip.getEntry('pack.mcmeta')).getText('UTF-8')
+                if (packMetadataText.contains('${')) {
+                    throw new GradleException("Unexpanded placeholders remain in pack.mcmeta of ${archive.name}")
+                }
+
+                def packMetadata
+                try {
+                    packMetadata = new JsonSlurper().parseText(packMetadataText)
+                } catch (Exception exception) {
+                    throw new GradleException("Invalid pack.mcmeta JSON in ${archive.name}", exception)
+                }
+
+                def packSection = packMetadata instanceof Map ? packMetadata.pack : null
+                if (!(packSection instanceof Map)) {
+                    throw new GradleException("Missing pack section in pack.mcmeta of ${archive.name}")
+                }
+                if (!(packSection.description instanceof String) || packSection.description.trim().isEmpty()) {
+                    throw new GradleException("Missing pack description in pack.mcmeta of ${archive.name}")
+                }
+
+                int expectedPackFormat = project.property('resource_pack_format').toString().toInteger()
+                if (!(packSection.pack_format instanceof Number) ||
+                        packSection.pack_format.intValue() != expectedPackFormat) {
+                    throw new GradleException(
+                            "Resource pack format ${packSection.pack_format} does not match ${expectedPackFormat} " +
+                                    "in ${archive.name}"
+                    )
+                }
             }
 
             def manifestEntry = zip.getEntry('META-INF/MANIFEST.MF')
