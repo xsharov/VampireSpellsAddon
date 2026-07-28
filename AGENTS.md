@@ -399,6 +399,8 @@ Verify all of the following:
 
 - No unexpanded `${...}` placeholders remain in `neoforge.mods.toml` or
   `mods.toml`.
+- The Forge 1.20.1 JAR contains a valid root `pack.mcmeta` with resource pack
+  format `15`.
 - No `io/redspace/`, `de/teamlapen/`, or bundled loader classes exist in either
   main JAR.
 - The main JAR, not `*-sources.jar`, is selected for distribution.
