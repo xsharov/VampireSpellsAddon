@@ -59,6 +59,12 @@ Minecraft 1.20.1 deliberately uses Forge rather than NeoForge: supported
 Iron's Spells 3.15+ builds require the Forge 47.4 line, while the NeoForge
 1.20.1 line does not provide that loader baseline.
 
+## Support development
+
+[Support me with a donation ✨](https://web.tribute.tg/d/Oec)
+
+Your support motivates me to continue developing and maintaining this project. Thanks!
+
 ## Build and development
 
 Use the committed Gradle wrapper. Gradle selects the Java 21 toolchain for the
