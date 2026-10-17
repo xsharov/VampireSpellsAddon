@@ -32,6 +32,14 @@ class BloodMechanicsTest {
     }
 
     @Test
+    void requiresTheFullManaPrice() {
+        assertTrue(BloodMechanics.canAffordMana(50, 50));
+        assertTrue(BloodMechanics.canAffordMana(0, 0));
+        assertFalse(BloodMechanics.canAffordMana(49.9f, 50));
+        assertFalse(BloodMechanics.canAffordMana(Float.NaN, 50));
+    }
+
+    @Test
     void requiresTheFullAtomicBloodCost() {
         assertTrue(BloodMechanics.canAffordBlood(5, 5));
         assertFalse(BloodMechanics.canAffordBlood(4, 5));

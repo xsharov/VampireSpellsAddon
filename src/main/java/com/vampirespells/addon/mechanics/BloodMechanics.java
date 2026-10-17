@@ -35,13 +35,11 @@ public final class BloodMechanics {
     }
 
     public static boolean shouldUseBlood(boolean alwaysUseBlood, float currentMana, int manaCost) {
-        if (alwaysUseBlood) {
-            return true;
-        }
-        if (manaCost <= 0) {
-            return false;
-        }
-        return !Float.isFinite(currentMana) || currentMana + MANA_EPSILON < manaCost;
+        return alwaysUseBlood || !canAffordMana(currentMana, manaCost);
+    }
+
+    public static boolean canAffordMana(float currentMana, int manaCost) {
+        return manaCost <= 0 || (Float.isFinite(currentMana) && currentMana + MANA_EPSILON >= manaCost);
     }
 
     public static boolean canAffordBlood(int currentBlood, int bloodCost) {

@@ -36,7 +36,10 @@ mana gate and reverse the Ray animation.
   Siphoning always keeps its normal mana cost and continues to restore blood.
 - Iron's Spells still ends a continuous spell, such as Fire Breath, when the
   caster's mana cannot cover two more pulses, so a blood-paid continuous cast
-  without that much mana fires a single pulse.
+  without that much mana fires a single pulse. In blood-only mode, a channel
+  whose blood runs out keeps going without effect until it is released.
+- If the Blood School is removed from `bloodCastingSchools`, a vampire must
+  have enough mana for Devour's multiplied price to cast it.
 - Devour's configurable mana multiplier still applies only to vampire casters;
   its scaled final price is also the basis for a blood payment. Every Blood
   School spell cast by a vampire uses

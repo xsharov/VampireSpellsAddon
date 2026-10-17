@@ -17,6 +17,9 @@ final class BloodSpellHandler {
     void onSpellPreCast(Object event) {
         Player caster = IronsSpellsBridge.player(event);
         ResourceLocation spellId = IronsSpellsBridge.spellId(event);
+        if (SpellIds.DEVOUR.equals(spellId)) {
+            enforceDevourManaPrice(event, caster);
+        }
         if (!isResourceReplacementCandidate(event, caster, spellId)
                 || IronsSpellsBridge.hasRecast(caster, spellId)) {
             return;
@@ -199,6 +202,44 @@ final class BloodSpellHandler {
                 IronsSpellsBridge.currentMana(caster),
                 manaCost
         );
+    }
+
+    private static void enforceDevourManaPrice(Object event, Player caster) {
+        if (!isServerPlayer(caster)
+                || caster.isCreative()
+                || BloodCastHooks.usesBloodCasting(
+                        SpellIds.DEVOUR,
+                        IronsSpellsBridge.schoolId(IronsSpellsBridge.school(event))
+                )
+                || !IronsSpellsBridge.consumesMana(IronsSpellsBridge.castSource(event))
+                || !VampirismBridge.vampire(caster).isVampire()
+                || IronsSpellsBridge.hasRecast(caster, SpellIds.DEVOUR)) {
+            return;
+        }
+
+        int manaCost = BloodCastHooks.adjustedManaCost(
+                SpellIds.DEVOUR,
+                IronsSpellsBridge.spellManaCost(SpellIds.DEVOUR, IronsSpellsBridge.spellLevel(event))
+        );
+        if (BloodMechanics.canAffordMana(IronsSpellsBridge.currentMana(caster), manaCost)) {
+            return;
+        }
+
+        if (IronsSpellsBridge.cancelPreCast(event)) {
+            IronsSpellsBridge.resetAdditionalCastData(caster);
+            caster.displayClientMessage(
+                    Component.translatable(
+                            "ui.irons_spellbooks.cast_error_mana",
+                            Component.translatable("spell.irons_spellbooks.devour")
+                    ).withStyle(ChatFormatting.RED),
+                    true
+            );
+            VampireSpellsAddon.LOGGER.debug(
+                    "Prevented Devour by vampire {} without blood casting: {} mana required",
+                    caster.getName().getString(),
+                    manaCost
+            );
+        }
     }
 
     private static void adjustDevourManaCost(Object event, Player caster) {

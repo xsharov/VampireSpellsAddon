@@ -121,7 +121,10 @@ versions and the new range has been tested.
     vampires are excluded from resource replacement.
   - The blood price uses the final `SpellOnCastEvent` mana price and the
     configured mana-to-blood ratio. Devour's vampire-only mana multiplier is
-    applied before either resource is selected.
+    applied before either resource is selected. When the Blood School is not
+    listed, Devour cannot fall back to blood, so `SpellPreCastEvent` requires
+    mana for the multiplied price and otherwise cancels with Iron's
+    not-enough-mana message.
   - Insufficient blood cancels before the mana debit and spell effect. No
     partial blood or mana debit is retained.
   - Ray of Siphoning always keeps its upstream mana cost and continues to
@@ -456,6 +459,12 @@ Manual gameplay coverage for integration changes:
   Iron's Spells' own mana check. A blood-paid continuous cast without enough
   mana for two pulses therefore fires once; changing that would require a new
   `MagicManager` transformation.
+- In forced blood-only mode, mana is never spent, so a continuous channel keeps
+  pulsing after blood runs out. Each unpaid pulse is stopped like any unpaid
+  cast and shows the not-enough-blood message, but the channel only ends when
+  the player releases it or it times out, and a denied final pulse adds no
+  cooldown. Ending the channel early would need a new reflective cast-cancel
+  contract such as `Utils#serverSideCancelCast`.
 - NeoForge post-damage correlation assumes synchronous paired Pre/Post events.
   Forge 1.20.1 has no matching Post event; its `LOWEST` `LivingDamageEvent`
   amount is the best available delivered-damage estimate and is capped to the
