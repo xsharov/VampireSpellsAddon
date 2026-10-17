@@ -50,7 +50,9 @@ mana gate and reverse the Ray animation.
   who cast it. Delivered holy health damage reflects onto a vampire player
   caster.
 - Holy healing damages vampire casters/targets and suppresses the corresponding
-  heal. Holy utility spells damage a vampire caster, clear any targeting data
+  heal. `disableHolyHealDamage = true` restores Iron's Spells healing: holy
+  heals then heal vampires normally and never damage the caster or target.
+  Holy utility spells damage a vampire caster, clear any targeting data
   created during pre-cast checks, and cancel the cast.
 - Cast and heal correlation state is bounded and cleared on lifecycle
   boundaries so nested or interrupted actions cannot affect an unrelated later

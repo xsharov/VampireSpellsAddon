@@ -25,6 +25,8 @@ public final class AddonConfig {
     public static final Supplier<Double> RAY_BLOOD_RESTORE_MULTIPLIER;
     public static final Supplier<Double> RAY_BLOOD_SATURATION;
 
+    public static final Supplier<Boolean> DISABLE_HOLY_HEAL_DAMAGE;
+
     private AddonConfig() {
     }
 
@@ -88,6 +90,22 @@ public final class AddonConfig {
         RAY_BLOOD_SATURATION = builder
                 .comment("Saturation modifier used when restoring blood with Ray of Siphoning.")
                 .defineInRange("rayBloodSaturation", 0.5d, 0d, 5d);
+
+        builder.pop();
+
+        builder.comment("Holy spell integration settings").push("holy_spells");
+
+        DISABLE_HOLY_HEAL_DAMAGE = builder
+                .comment(
+                        "When true, holy healing spells (Heal, Greater Heal, Healing Circle, Blessing of Life,",
+                        "Cloud of Regeneration) work as in Iron's Spells: they heal vampire players normally",
+                        "and never damage a vampire caster or a healed vampire.",
+                        "When false, a vampire player who heals someone else and a vampire player who is healed",
+                        "take damage equal to the heal, and the heal on the vampire is cancelled.",
+                        "Holy damage reflection, doubled holy damage to vampire NPCs, and the holy utility",
+                        "spell penalty are not affected."
+                )
+                .define("disableHolyHealDamage", false);
 
         builder.pop();
 

@@ -140,7 +140,9 @@ versions and the new range has been tested.
 - Delivered holy health damage reflects onto vampire player casters. Vampirism
   NPC vampires take doubled holy damage independently of who cast the spell.
 - Holy heals damage vampire casters/targets and queue suppression of the
-  corresponding `LivingHealEvent` amount.
+  corresponding `LivingHealEvent` amount. `disableHolyHealDamage = true` skips
+  this handling entirely, so holy heals behave as in Iron's Spells; holy damage
+  reflection, NPC holy damage, and the utility penalty are unaffected.
 - Holy utility spells (`angel_wing`, `fortify`, `wisp`, `haste`, `cleanse`, and
   `sunbeam`) deal 5 damage to a vampire caster, reset upstream additional cast
   data, and cancel the cast.
@@ -432,7 +434,8 @@ Manual gameplay coverage for integration changes:
 - Ray and Devour against armor, absorption, lethal/overkill, and invalid targets;
 - each blood-cost spell at multiple levels;
 - Ray UV direction for local and remote vampire/non-vampire players;
-- holy damage, self-heal, targeted heal, area heal, utility, and friendly fire;
+- holy damage, self-heal, targeted heal, area heal, utility, and friendly fire,
+  with `disableHolyHealDamage` both off and on;
 - logout/death/dimension transition while cast state is pending.
 
 ## Known Risks Requiring Runtime Validation
