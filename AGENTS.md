@@ -107,22 +107,35 @@ versions and the new range has been tested.
   final `LivingDamageEvent` at `LOWEST` priority. Restoration accounts for
   absorption, caps lethal overkill to the target's health at that point, and
   never requests more than the caster's free blood capacity.
-- Vampire players use mana normally for mana-consuming Blood School spells.
-  When current mana cannot cover the full price, all such spells except Ray of
-  Siphoning atomically replace the complete mana debit with blood. The server
-  config can instead make this blood-only replacement unconditional.
-  - Creative players, cast sources that do not consume mana, and upstream
-    recasts are excluded from resource replacement.
+- Vampire players use mana normally for mana-consuming spells. For spells of
+  the schools selected by `bloodCastingSchools` (only the Blood School by
+  default), when current mana cannot cover the full price, the complete mana
+  debit is atomically replaced with blood. The server config can instead make
+  this blood-only replacement unconditional.
+  - `bloodCastingSchools` entries are full school ids, bare Iron's Spells
+    school names resolved in the `irons_spellbooks` namespace, or `*` for every
+    school; an empty list disables blood casting. `SchoolSelection` owns entry
+    parsing and the config element validator.
+  - Creative players, cast sources that do not consume mana, upstream recasts,
+    Ray of Siphoning, and the holy utility spells that are always blocked for
+    vampires are excluded from resource replacement.
   - The blood price uses the final `SpellOnCastEvent` mana price and the
     configured mana-to-blood ratio. Devour's vampire-only mana multiplier is
-    applied before either resource is selected.
+    applied before either resource is selected. When the Blood School is not
+    listed, Devour cannot fall back to blood, so `SpellPreCastEvent` requires
+    mana for the multiplied price and otherwise cancels with Iron's
+    not-enough-mana message.
   - Insufficient blood cancels before the mana debit and spell effect. No
     partial blood or mana debit is retained.
   - Ray of Siphoning always keeps its upstream mana cost and continues to
     restore blood.
+  - Iron's Spells ends a continuous cast from its own `MagicManager` mana check
+    when mana cannot cover two more pulses; blood casting does not change that
+    check.
 - Every Blood School spell cast by a vampire, including Ray of Siphoning, uses
   the configured cooldown multiplier. The default is `2/3`, making cooldowns
-  1.5 times shorter while preserving upstream player and item modifiers.
+  1.5 times shorter while preserving upstream player and item modifiers. Other
+  schools keep their cooldowns even when their spells are cast with blood.
 - Ray of Siphoning reverses its animated UV flow for vampire player casters on
   the client without changing its geometry or target-to-caster particles. Its
   guide text is overridden in all 15 Iron's Spells locales with the additional
@@ -130,7 +143,9 @@ versions and the new range has been tested.
 - Delivered holy health damage reflects onto vampire player casters. Vampirism
   NPC vampires take doubled holy damage independently of who cast the spell.
 - Holy heals damage vampire casters/targets and queue suppression of the
-  corresponding `LivingHealEvent` amount.
+  corresponding `LivingHealEvent` amount. `disableHolyHealDamage = true` skips
+  this handling entirely, so holy heals behave as in Iron's Spells; holy damage
+  reflection, NPC holy damage, and the utility penalty are unaffected.
 - Holy utility spells (`angel_wing`, `fortify`, `wisp`, `haste`, `cleanse`, and
   `sunbeam`) deal 5 damage to a vampire caster, reset upstream additional cast
   data, and cancel the cast.
@@ -417,10 +432,13 @@ Manual gameplay coverage for integration changes:
 - sufficient/insufficient mana, default fallback, forced blood-only mode,
   insufficient blood, creative and non-mana sources, cast cancellation, and
   recasts;
+- `bloodCastingSchools` with the default Blood School entry, extra bare and
+  full school ids, `*`, an empty list, and continuous non-Blood spells;
 - Ray and Devour against armor, absorption, lethal/overkill, and invalid targets;
 - each blood-cost spell at multiple levels;
 - Ray UV direction for local and remote vampire/non-vampire players;
-- holy damage, self-heal, targeted heal, area heal, utility, and friendly fire;
+- holy damage, self-heal, targeted heal, area heal, utility, and friendly fire,
+  with `disableHolyHealDamage` both off and on;
 - logout/death/dimension transition while cast state is pending.
 
 ## Known Risks Requiring Runtime Validation
@@ -436,6 +454,17 @@ Manual gameplay coverage for integration changes:
   Recheck the invocation target and Ray float-local ordinal against every Iron's
   Spells update, then smoke-load both the compatibility floor and current
   runtime on the appropriate server/client side.
+- Blood casting for schools other than Blood reuses the same mana-gate redirect
+  and `SpellOnCastEvent` replacement, but continuous spells still stop from
+  Iron's Spells' own mana check. A blood-paid continuous cast without enough
+  mana for two pulses therefore fires once; changing that would require a new
+  `MagicManager` transformation.
+- In forced blood-only mode, mana is never spent, so a continuous channel keeps
+  pulsing after blood runs out. Each unpaid pulse is stopped like any unpaid
+  cast and shows the not-enough-blood message, but the channel only ends when
+  the player releases it or it times out, and a denied final pulse adds no
+  cooldown. Ending the channel early would need a new reflective cast-cancel
+  contract such as `Utils#serverSideCancelCast`.
 - NeoForge post-damage correlation assumes synchronous paired Pre/Post events.
   Forge 1.20.1 has no matching Post event; its `LOWEST` `LivingDamageEvent`
   amount is the best available delivered-damage estimate and is capped to the

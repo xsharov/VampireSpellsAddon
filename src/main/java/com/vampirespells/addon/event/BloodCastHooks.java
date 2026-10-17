@@ -4,6 +4,7 @@ import com.vampirespells.addon.config.AddonConfig;
 import com.vampirespells.addon.integration.IronsSpellsBridge;
 import com.vampirespells.addon.integration.VampirismBridge;
 import com.vampirespells.addon.mechanics.BloodMechanics;
+import com.vampirespells.addon.mechanics.SchoolSelection;
 import com.vampirespells.addon.mechanics.SpellIds;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.player.Player;
@@ -26,9 +27,7 @@ public final class BloodCastHooks {
         }
 
         ResourceLocation spellId = IronsSpellsBridge.spellResource(spell);
-        if (spellId == null
-                || SpellIds.RAY_OF_SIPHONING.equals(spellId)
-                || !IronsSpellsBridge.isBloodSpell(spell)
+        if (!usesBloodCasting(spellId, IronsSpellsBridge.spellSchoolId(spell))
                 || !VampirismBridge.vampire(player).isVampire()) {
             return false;
         }
@@ -42,6 +41,13 @@ public final class BloodCastHooks {
                 IronsSpellsBridge.currentMana(player),
                 manaCost
         );
+    }
+
+    static boolean usesBloodCasting(ResourceLocation spellId, ResourceLocation schoolId) {
+        return spellId != null
+                && !SpellIds.RAY_OF_SIPHONING.equals(spellId)
+                && !SpellIds.HOLY_UTILITY_SPELLS.contains(spellId)
+                && SchoolSelection.contains(AddonConfig.BLOOD_CASTING_SCHOOLS.get(), schoolId);
     }
 
     static int adjustedManaCost(ResourceLocation spellId, int manaCost) {

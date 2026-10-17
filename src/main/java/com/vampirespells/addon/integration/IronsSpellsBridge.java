@@ -280,14 +280,18 @@ public final class IronsSpellsBridge {
         return resolved != null && hasSchoolId(resolved, school, BLOOD_SCHOOL);
     }
 
-    /** Returns whether an opaque AbstractSpell handle belongs to the Blood School. */
-    public static boolean isBloodSpell(Object spell) {
+    public static ResourceLocation schoolId(Object school) {
+        Contracts resolved = activeContracts();
+        return resolved != null ? schoolId(resolved, school) : null;
+    }
+
+    public static ResourceLocation spellSchoolId(Object spell) {
         Contracts resolved = activeContracts();
         if (resolved == null || !resolved.spell().type().isInstance(spell)) {
-            return false;
+            return null;
         }
         Object school = requiredValue(resolved, resolved.spell().school(), spell);
-        return school != null && hasSchoolId(resolved, school, BLOOD_SCHOOL);
+        return school == null ? null : schoolId(resolved, school);
     }
 
     /** Returns the resource id of an opaque AbstractSpell handle. */
@@ -398,13 +402,13 @@ public final class IronsSpellsBridge {
             Object school,
             ResourceLocation expectedId
     ) {
-        if (!resolved.spell().schoolType().isInstance(school)) {
-            return false;
-        }
-        ResourceLocation id = typedValue(
-                resolved, resolved.spell().schoolId(), school, ResourceLocation.class
-        );
-        return expectedId.equals(id);
+        return expectedId.equals(schoolId(resolved, school));
+    }
+
+    private static ResourceLocation schoolId(Contracts resolved, Object school) {
+        return resolved.spell().schoolType().isInstance(school)
+                ? typedValue(resolved, resolved.spell().schoolId(), school, ResourceLocation.class)
+                : null;
     }
 
     private static int intValue(Contracts resolved, Method method, Object target, Object... arguments) {

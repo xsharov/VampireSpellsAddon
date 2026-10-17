@@ -1,5 +1,7 @@
 package com.vampirespells.addon.config;
 
+import java.util.List;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 /** Loader-neutral surface used to define the server config once for both targets. */
@@ -14,6 +16,12 @@ interface ConfigSpecBuilder {
     Supplier<Double> defineInRange(String key, double defaultValue, double minimum, double maximum);
 
     Supplier<Boolean> define(String key, boolean defaultValue);
+
+    Supplier<List<? extends String>> defineStringList(
+            String key,
+            List<String> defaultValue,
+            Predicate<Object> elementValidator
+    );
 
     ConfigSpecBuilder pop();
 

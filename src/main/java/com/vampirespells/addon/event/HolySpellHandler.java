@@ -1,6 +1,7 @@
 package com.vampirespells.addon.event;
 
 import com.vampirespells.addon.VampireSpellsAddon;
+import com.vampirespells.addon.config.AddonConfig;
 import com.vampirespells.addon.integration.IronsSpellsBridge;
 import com.vampirespells.addon.integration.VampirismBridge;
 import com.vampirespells.addon.mechanics.SpellIds;
@@ -75,7 +76,10 @@ final class HolySpellHandler {
         float healAmount = IronsSpellsBridge.heal(event);
         LivingEntity caster = IronsSpellsBridge.healCaster(event);
         LivingEntity target = IronsSpellsBridge.healTarget(event);
-        if (!Float.isFinite(healAmount) || healAmount <= 0f || !isServerEntity(target)) {
+        if (!Float.isFinite(healAmount)
+                || healAmount <= 0f
+                || !isServerEntity(target)
+                || AddonConfig.DISABLE_HOLY_HEAL_DAMAGE.get()) {
             return;
         }
 
