@@ -19,20 +19,30 @@ mana gate and reverse the Ray animation.
   caster from delivered health damage. The amount is observed after absorption
   and other damage processing, excludes overkill by capping it to the target's
   health before the hit, and never requests more blood than the caster can hold.
-- By default, a vampire pays mana for every mana-consuming Blood School spell.
-  When the full mana price cannot be covered, every such spell except Ray of
-  Siphoning falls back to an atomic blood payment and spends no mana. If the
-  blood price cannot be paid in full, the spell effect is stopped without a
-  partial debit.
-- `alwaysUseBloodForVampireBloodSpells = true` changes those non-Ray casts to
+- By default, a vampire pays mana for every mana-consuming spell. Spells of
+  the schools listed in `bloodCastingSchools` (only the Blood School by
+  default) fall back to an atomic blood payment and spend no mana when the full
+  mana price cannot be covered. If the blood price cannot be paid in full, the
+  spell effect is stopped without a partial debit. Ray of Siphoning and the
+  holy utility spells that vampires cannot cast never use blood.
+- `bloodCastingSchools` takes one entry per school: a full school id such as
+  `irons_spellbooks:fire`, a bare Iron's Spells school name such as `fire`, or
+  `*` for every school, including schools added by other mods. For example,
+  `["blood", "fire", "ice"]` enables Blood, Fire, and Ice spells, and `[]`
+  turns blood casting off.
+- `alwaysUseBloodForVampireBloodSpells = true` changes those casts to
   blood-only mode even while mana is available. Creative casts, non-mana cast
   sources, and recasts keep their normal free-resource behavior. Ray of
   Siphoning always keeps its normal mana cost and continues to restore blood.
+- Iron's Spells still ends a continuous spell, such as Fire Breath, when the
+  caster's mana cannot cover two more pulses, so a blood-paid continuous cast
+  without that much mana fires a single pulse.
 - Devour's configurable mana multiplier still applies only to vampire casters;
   its scaled final price is also the basis for a blood payment. Every Blood
   School spell cast by a vampire uses
   `vampireBloodSpellCooldownMultiplier`, which defaults to `2/3` for a
-  cooldown that is 1.5 times shorter.
+  cooldown that is 1.5 times shorter. Other schools keep their normal
+  cooldowns even when their spells are cast with blood.
 - A vampire's Ray of Siphoning animates toward the caster rather than toward the
   target. Its guide text also explains the spell's night-creature origin in all
   languages supported by Iron's Spells.

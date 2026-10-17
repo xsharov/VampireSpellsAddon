@@ -40,7 +40,7 @@ final class BloodSpellHandler {
             IronsSpellsBridge.resetAdditionalCastData(caster);
             showInsufficientBlood(caster);
             VampireSpellsAddon.LOGGER.debug(
-                    "Prevented Blood School cast {} by vampire {}: {} blood required",
+                    "Prevented blood cast {} by vampire {}: {} blood required",
                     spellId,
                     caster.getName().getString(),
                     bloodCost
@@ -150,7 +150,7 @@ final class BloodSpellHandler {
         int bloodCost = calculateBloodCost(manaCost);
         if (!IronsSpellsBridge.setManaCost(event, 0)) {
             VampireSpellsAddon.LOGGER.error(
-                    "Blocked Blood School cast {} because its mana cost could not be replaced",
+                    "Blocked blood cast {} because its mana cost could not be replaced",
                     spellId
             );
             return true;
@@ -160,7 +160,7 @@ final class BloodSpellHandler {
         if (!paid) {
             showInsufficientBlood(caster);
             VampireSpellsAddon.LOGGER.debug(
-                    "Blocked completed Blood School cast {} by vampire {}: {} blood required",
+                    "Blocked completed blood cast {} by vampire {}: {} blood required",
                     spellId,
                     caster.getName().getString(),
                     bloodCost
@@ -169,7 +169,7 @@ final class BloodSpellHandler {
         }
 
         VampireSpellsAddon.LOGGER.debug(
-                "Replaced {} mana with {} blood for vampire Blood School cast {} by {}",
+                "Replaced {} mana with {} blood for vampire cast {} by {}",
                 manaCost,
                 bloodCost,
                 spellId,
@@ -185,9 +185,10 @@ final class BloodSpellHandler {
     ) {
         return isServerPlayer(caster)
                 && !caster.isCreative()
-                && spellId != null
-                && !SpellIds.RAY_OF_SIPHONING.equals(spellId)
-                && IronsSpellsBridge.isBloodSchool(IronsSpellsBridge.school(event))
+                && BloodCastHooks.usesBloodCasting(
+                        spellId,
+                        IronsSpellsBridge.schoolId(IronsSpellsBridge.school(event))
+                )
                 && IronsSpellsBridge.consumesMana(IronsSpellsBridge.castSource(event))
                 && VampirismBridge.vampire(caster).isVampire();
     }

@@ -107,12 +107,18 @@ versions and the new range has been tested.
   final `LivingDamageEvent` at `LOWEST` priority. Restoration accounts for
   absorption, caps lethal overkill to the target's health at that point, and
   never requests more than the caster's free blood capacity.
-- Vampire players use mana normally for mana-consuming Blood School spells.
-  When current mana cannot cover the full price, all such spells except Ray of
-  Siphoning atomically replace the complete mana debit with blood. The server
-  config can instead make this blood-only replacement unconditional.
-  - Creative players, cast sources that do not consume mana, and upstream
-    recasts are excluded from resource replacement.
+- Vampire players use mana normally for mana-consuming spells. For spells of
+  the schools selected by `bloodCastingSchools` (only the Blood School by
+  default), when current mana cannot cover the full price, the complete mana
+  debit is atomically replaced with blood. The server config can instead make
+  this blood-only replacement unconditional.
+  - `bloodCastingSchools` entries are full school ids, bare Iron's Spells
+    school names resolved in the `irons_spellbooks` namespace, or `*` for every
+    school; an empty list disables blood casting. `SchoolSelection` owns entry
+    parsing and the config element validator.
+  - Creative players, cast sources that do not consume mana, upstream recasts,
+    Ray of Siphoning, and the holy utility spells that are always blocked for
+    vampires are excluded from resource replacement.
   - The blood price uses the final `SpellOnCastEvent` mana price and the
     configured mana-to-blood ratio. Devour's vampire-only mana multiplier is
     applied before either resource is selected.
@@ -120,9 +126,13 @@ versions and the new range has been tested.
     partial blood or mana debit is retained.
   - Ray of Siphoning always keeps its upstream mana cost and continues to
     restore blood.
+  - Iron's Spells ends a continuous cast from its own `MagicManager` mana check
+    when mana cannot cover two more pulses; blood casting does not change that
+    check.
 - Every Blood School spell cast by a vampire, including Ray of Siphoning, uses
   the configured cooldown multiplier. The default is `2/3`, making cooldowns
-  1.5 times shorter while preserving upstream player and item modifiers.
+  1.5 times shorter while preserving upstream player and item modifiers. Other
+  schools keep their cooldowns even when their spells are cast with blood.
 - Ray of Siphoning reverses its animated UV flow for vampire player casters on
   the client without changing its geometry or target-to-caster particles. Its
   guide text is overridden in all 15 Iron's Spells locales with the additional
@@ -417,6 +427,8 @@ Manual gameplay coverage for integration changes:
 - sufficient/insufficient mana, default fallback, forced blood-only mode,
   insufficient blood, creative and non-mana sources, cast cancellation, and
   recasts;
+- `bloodCastingSchools` with the default Blood School entry, extra bare and
+  full school ids, `*`, an empty list, and continuous non-Blood spells;
 - Ray and Devour against armor, absorption, lethal/overkill, and invalid targets;
 - each blood-cost spell at multiple levels;
 - Ray UV direction for local and remote vampire/non-vampire players;
@@ -436,6 +448,11 @@ Manual gameplay coverage for integration changes:
   Recheck the invocation target and Ray float-local ordinal against every Iron's
   Spells update, then smoke-load both the compatibility floor and current
   runtime on the appropriate server/client side.
+- Blood casting for schools other than Blood reuses the same mana-gate redirect
+  and `SpellOnCastEvent` replacement, but continuous spells still stop from
+  Iron's Spells' own mana check. A blood-paid continuous cast without enough
+  mana for two pulses therefore fires once; changing that would require a new
+  `MagicManager` transformation.
 - NeoForge post-damage correlation assumes synchronous paired Pre/Post events.
   Forge 1.20.1 has no matching Post event; its `LOWEST` `LivingDamageEvent`
   amount is the best available delivered-damage estimate and is capped to the

@@ -1,5 +1,8 @@
 package com.vampirespells.addon.config;
 
+import com.vampirespells.addon.mechanics.SchoolSelection;
+
+import java.util.List;
 import java.util.function.Supplier;
 
 public final class AddonConfig {
@@ -12,6 +15,7 @@ public final class AddonConfig {
     public static final Supplier<Integer> BLOOD_COST_MANA_CEILING;
 
     public static final Supplier<Boolean> ALWAYS_USE_BLOOD_FOR_VAMPIRE_BLOOD_SPELLS;
+    public static final Supplier<List<? extends String>> BLOOD_CASTING_SCHOOLS;
     public static final Supplier<Double> VAMPIRE_BLOOD_SPELL_COOLDOWN_MULTIPLIER;
 
     public static final Supplier<Double> DEVOUR_MANA_MULTIPLIER;
@@ -45,11 +49,25 @@ public final class AddonConfig {
 
         ALWAYS_USE_BLOOD_FOR_VAMPIRE_BLOOD_SPELLS = builder
                 .comment(
-                        "When true, vampire players always replace mana with blood for Blood School spells.",
+                        "When true, vampire players always replace mana with blood for spells of the schools in bloodCastingSchools.",
                         "When false, blood is used only when current mana cannot cover the full mana cost.",
                         "Ray of Siphoning, creative players, non-mana cast sources, and recasts are excluded."
                 )
                 .define("alwaysUseBloodForVampireBloodSpells", false);
+        BLOOD_CASTING_SCHOOLS = builder
+                .comment(
+                        "Spell schools whose mana cost vampire players can pay with blood, as described above.",
+                        "Each entry turns one school on; spells of schools that are not listed always use mana.",
+                        "An entry is a school id such as \"irons_spellbooks:fire\", or just \"fire\" for an Iron's Spells school.",
+                        "Iron's Spells schools: fire, ice, lightning, holy, ender, blood, evocation, nature, eldritch.",
+                        "Use [\"*\"] to turn on every school, including schools added by other mods, or [] to turn blood casting off.",
+                        "Example: bloodCastingSchools = [\"blood\", \"fire\", \"ice\"] lets vampires cast Blood, Fire and Ice spells with blood."
+                )
+                .defineStringList(
+                        "bloodCastingSchools",
+                        List.of("irons_spellbooks:blood"),
+                        SchoolSelection::isValidEntry
+                );
         VAMPIRE_BLOOD_SPELL_COOLDOWN_MULTIPLIER = builder
                 .comment("Cooldown multiplier for every Blood School spell cast by a vampire player.")
                 .defineInRange("vampireBloodSpellCooldownMultiplier", 2d / 3d, 0d, 10d);
